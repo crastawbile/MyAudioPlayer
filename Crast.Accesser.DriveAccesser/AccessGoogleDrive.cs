@@ -6,7 +6,7 @@ using System.Diagnostics;
 namespace Crast.Accesser.DriveAccesser{
 
 
-
+    [Obsolete]
     public class AccessGoogleDrive {
         public readonly DriveService _service;
         public List<string> RewritableFolderIds { get; init; }
@@ -97,10 +97,9 @@ namespace Crast.Accesser.DriveAccesser{
         }
     }
 
-    public class AccessLocalDrive
-    {
-    }
 
+
+    [Obsolete]
 
     public class AudioAnalysisManager{
         // --- 固定設定 ---
