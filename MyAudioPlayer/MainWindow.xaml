@@ -1,0 +1,22 @@
+﻿<Window x:Class="MyAudioPlayer.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:MyAudioPlayer"
+        mc:Ignorable="d"
+        Title="MainWindow" Height="450" Width="800">
+    <Grid>
+        <DockPanel>
+            <!-- ログ出力用のスクロール可能なテキストエリア -->
+            <ScrollViewer x:Name="LogViewer" DockPanel.Dock="Bottom" Height="200" Background="#F0F0F0">
+                <TextBlock x:Name="LogBlock" TextWrapping="Wrap" FontFamily="Consolas" Padding="10"/>
+            </ScrollViewer>
+
+            <!-- ここに後で操作ボタンなどを置く -->
+            <StackPanel VerticalAlignment="Center">
+                <TextBlock Text="Audio Analysis Tool" FontSize="20" HorizontalAlignment="Center"/>
+            </StackPanel>
+        </DockPanel>
+    </Grid>
+</Window>
