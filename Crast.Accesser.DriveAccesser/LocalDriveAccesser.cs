@@ -20,8 +20,8 @@ namespace Crast.Accesser.DriveAccesser{
     public record LocalFilePath : LocalDrivePath, IFilePath{
         public static implicit operator LocalFilePath(string path) => new(path);
         public LocalFilePath(string path) : base(path) { }
-        public override bool Exists(bool force = false) => System.IO.File.Exists(Value);
-        public FileSystemType Extension => System.IO.Path.GetExtension(Value).FromExtension();
+        public override bool Exists(bool force = false) => File.Exists(Value);
+        public FileSystemType Extension => Path.GetExtension(Value).FromExtension();
     }
     public record LocalDirectoryPath : LocalDrivePath, IDirectoryPath{
         public static implicit operator LocalDirectoryPath(string path) => new(path);
