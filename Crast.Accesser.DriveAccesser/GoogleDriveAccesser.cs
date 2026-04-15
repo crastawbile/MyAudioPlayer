@@ -81,5 +81,11 @@
     }
 
 
+    //現状、ダミー実装すらできていない。
+    public class GoogleDriveAccesser:SingleDriveAccesserGeneric<GoogleDrivePath>{
+        
+    }
+
+
 
 }
