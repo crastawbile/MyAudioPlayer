@@ -17,13 +17,13 @@ namespace Crast.Accesser.DriveAccesser{
         public override LocalDirectoryPath? Parent => ParentPath() == null ? null : (LocalDirectoryPath?)ParentPath()!;
         private string? ParentPath() => Path.GetDirectoryName(Value);
     }
-    public record LocalFilePath : LocalDrivePath, IFilePath{
+    public sealed record LocalFilePath : LocalDrivePath, IFilePath{
         public static implicit operator LocalFilePath(string path) => new(path);
         public LocalFilePath(string path) : base(path) { }
         public override bool Exists(bool force = false) => File.Exists(Value);
         public FileSystemType Extension => Path.GetExtension(Value).FromExtension();
     }
-    public record LocalDirectoryPath : LocalDrivePath, IDirectoryPath{
+    public sealed record LocalDirectoryPath : LocalDrivePath, IDirectoryPath{
         public static implicit operator LocalDirectoryPath(string path) => new(path);
         public LocalDirectoryPath(string path) : base(path) { }
         public override bool Exists(bool force = false) => Directory.Exists(Value);
@@ -31,7 +31,7 @@ namespace Crast.Accesser.DriveAccesser{
 
 
 
-    public class LocalDriveAccesser : SingleDriveAccesserGeneric<LocalDrivePath>{
+    internal class LocalDriveAccesser : SingleDriveAccesserGeneric<LocalDrivePath>{
 
         public LocalDriveAccesser(FileSystemPermissionBundle permission, bool allowEmpty = false, bool singleOnly = true)
             : base(permission, allowEmpty, singleOnly)

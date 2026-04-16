@@ -33,6 +33,7 @@ namespace Crast.Accesser.DriveAccesser{
     /// <remarks>
     /// 対応辞書を生成する際、名前が被る場合はより後のものが残る事には注意
     /// </remarks>
+    [Flags]
     public enum FileSystemType{
         // 各名前の前半で括ったものをFileSystemTypeManagerクラスの定数として
         // 自動で定義するため、カスタム属性だけでなく名付けルールも守れ。

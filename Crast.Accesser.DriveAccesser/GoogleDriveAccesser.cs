@@ -26,11 +26,11 @@
             return accsser.ItemExists(this);
         }
     }
-    public record GoogleFilePath : GoogleDrivePath, IFilePath{
+    public sealed record GoogleFilePath : GoogleDrivePath, IFilePath{
         public static implicit operator GoogleFilePath(string path) => new(path);
         public GoogleFilePath(string id) : base(id) { }
     }
-    public record GoogleDirectoryPath : GoogleDrivePath, IDirectoryPath{
+    public sealed record GoogleDirectoryPath : GoogleDrivePath, IDirectoryPath{
         public static implicit operator GoogleDirectoryPath(string path) => new(path);
         public GoogleDirectoryPath(string id) : base(id) { }
     }
@@ -50,7 +50,7 @@
         public string? MimeType => Type.ToMimeType();
         public bool IsDirectory => Type == FileSystemType.Directory;
     }
-    public static class GoogleDriveMetaDataBank{
+    internal static class GoogleDriveMetaDataBank{
         private static readonly Dictionary<GoogleDrivePath, GoogleDriveMetadata> B = [];
         public static void Add(this GoogleDriveMetadata metadata){
             if (B.ContainsKey(metadata.Id)) throw new ArgumentException($"このIDは既に存在する{metadata}");
@@ -82,7 +82,7 @@
 
 
     //現状、ダミー実装すらできていない。
-    public class GoogleDriveAccesser:SingleDriveAccesserGeneric<GoogleDrivePath>{
+    internal class GoogleDriveAccesser:SingleDriveAccesserGeneric<GoogleDrivePath>{
         
     }
 

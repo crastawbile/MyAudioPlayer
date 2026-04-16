@@ -1,5 +1,10 @@
 ﻿geminiとの議論用に、DriveAccesserプロジェクトのコードマップを以下に示す。
 
+0,前提
+geminiは、実際のコードを確認しながら議論を行うこと。
+架空のコードを基に話されては、活用できる情報が少なすぎる。
+記憶できる文字数も発言できる文字数もわずかなのだから、無意味な情報を膨らませるのは絶対に避けたい。
+
 
 
 1,目的と概要
@@ -145,6 +150,8 @@ GoogleItemPath.parentにもforce引数を追加して、キャッシュを無視
 上位権限と指定権限から具体的なaccesserを生成するメソッドがFileSystemPermissionBundleに存在しているが、個々のDriveAccesserに持たせるべきではないか。
 というか、FileSystemPermissionBundleはDrive種が増えたことで書き直されてはならないと思う。
 
+適当に配置したエラー型は適切か否か。
+
 
 ex2,指摘された改善点
 AccessGoogleDriveファイル上のあれこれは、DriveAccesserを前提とした構造を作り始める前のコードであるため、DriveAccesserとの整合性が無いのは当然とする。
@@ -152,7 +159,7 @@ GoogleDriveAccesserは現状何の実装もなされていない。
 GoogleDriveAccesserを作り始める前に、既存部分の修正と、GoogleDriveを扱うために必要なクラスが十分かの確認を行う必要がある。
 
 IDriveAccesser系列に関しては、全部internalで大丈夫っぽい……？
-
+→基底のIDriveAccesserのみpublicで公開、実装クラスはinternalにするため、トリプルディスパッチの前段をdynamicで踏みつぶす形で修正中。
 
 
 ＞＞＞
