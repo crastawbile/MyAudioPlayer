@@ -1,4 +1,6 @@
-﻿namespace Crast.Accesser.DriveAccesser{
+﻿using System.Security;
+
+namespace Crast.Accesser.DriveAccesser{
 
 
 
@@ -9,17 +11,16 @@
     /// フォルダ名すら隠蔽する前提。
     /// 内部で必要なaccesserはフィールドに入れて便利に使おう。
     /// </remarks>
-    public class UsingDriveAccesser{
-        public FileSystemPermissionBundle Permissions { get; init; }
-        public UsingDriveAccesser(FileSystemPermissionBundle permissions){
-            Permissions = permissions;
-        }
-        protected IDriveAccesser CreateDriveAccesser(FileSystemPermissionBundle permission, bool allowEmpty = false, bool singleOnly = false){
-            if (permission.IsEmpty) return new EmptyDriveAccesser(permission, allowEmpty, singleOnly);
-            var p = permission.AsSinglePermission(singleOnly);
-            if (p.DriveType == DriveTypeEnum.LocalDrive) { return Permissions.CreateLocalDriveAccesser(permission, allowEmpty, singleOnly); }
-            else if (p.DriveType == DriveTypeEnum.GoogleDrive) { return Permissions.CreateGoogleDriveAccesser(permission, allowEmpty, singleOnly); }
-            throw new ArgumentException($"定義されていないドライブへのアクセス要求{permission}");
+    public sealed class SolidDrivemanager{
+        private Dictionary<string, IDriveAccesser> _Accessers = [];
+        public SolidDrivemanager(Dictionary<string, FileSystemPermissionBundle> permissions){
+            //コンストラクタで、扱うAccesserを生成・保持する。他のAccesserは一切扱わない。
+            foreach (var (name, permission) in permissions){
+                var p = permission.AsSinglePermission(true);
+                if (p.DriveType == DriveTypeEnum.LocalDrive) { _Accessers.Add(name, new LocalDriveAccesser(permission)); }
+                else if (p.DriveType == DriveTypeEnum.GoogleDrive) { _Accessers.Add(name, new GoogleDriveAccesser(permission)); }
+                else { throw new ArgumentException($"定義されていないドライブへのアクセス要求{permission}"); }
+            }
         }
     }
     /// <summary>
@@ -28,17 +29,19 @@
     /// <remarks>
     /// 多数のフォルダを管理するクラスの基底に使う。
     /// </remarks>
-    public class MultiDriveAccesser : UsingDriveAccesser{
-        public MultiDriveAccesser(FileSystemPermissionBundle permissions) : base(permissions) { }
+    public sealed class TraficDriveManager{
+        public FileSystemPermissionBundle Permissions { get; init; }
+        public TraficDriveManager(FileSystemPermissionBundle permissions){
+            Permissions = permissions;
+        }
 
         //個別権限の使い捨てaccesserを生成する
-        protected IDriveAccesser GetTemporaryAccesser(
+        private IDriveAccesser GetTemporaryAccesser(
             DriveItemPath path,
             FileSystemType fileType,
             FileSystemAccessLevel requiredIfExist,
-            FileSystemAccessLevel requiredIfNotExist,
-            bool allowEmpty = false
-            )
+            FileSystemAccessLevel requiredIfNotExist
+        )
         {
             FileSystemAccessLevel level;
             if (requiredIfNotExist == FileSystemAccessLevel.None || path.Exists(true)){
@@ -46,17 +49,18 @@
             }else{
                 level = requiredIfNotExist;
             }
-            var p = Permissions.Narrow(
-                path: path,
-                fileType: fileType,
-                accessLevel: level,
-                allowEmpty: allowEmpty
-                );
-            if (p.IsEmpty) throw new ArgumentException($"許可されていないアクセスです: {path}   {Permissions}");
-            return CreateDriveAccesser(p);
+            var permission = Permissions
+                .Narrow(path,fileType,level)
+                .MergeAccessLevel()
+                ;
+            if (permission.IsEmpty) throw new ArgumentException($"許可されていないアクセスです: {path}   {Permissions}");
+            var p = permission.AsSinglePermission();
+            if (p.DriveType == DriveTypeEnum.LocalDrive) { return new LocalDriveAccesser(permission); }
+            else if (p.DriveType == DriveTypeEnum.GoogleDrive) { return new GoogleDriveAccesser(permission); }
+            throw new ArgumentException($"定義されていないドライブへのアクセス要求{permission}");
         }
-        public async Task<IFilePath> CreateEmptyFile<DirectoryT>(DirectoryT path, FileSystemType fileType, string fileName, bool canWrite = false)
-            where DirectoryT : DriveItemPath, IDirectoryPath
+        public async Task<IFilePath> CreateEmptyFile<FileT>(FileT path, FileSystemType fileType, string fileName, bool canWrite = false)
+        where FileT : DriveItemPath, IDirectoryPath
         {
             var accesser = GetTemporaryAccesser(
                 path: path,
@@ -64,10 +68,7 @@
                 requiredIfExist: canWrite ? FileSystemAccessLevel.WriteOnly : FileSystemAccessLevel.None,
                 requiredIfNotExist: FileSystemAccessLevel.CreateOnly
             );
-            return await accesser.CreateEmptyFile(path, fileName, canWrite);
-            if (accesser is LocalDriveAccesser la && path is LocalDirectoryPath lp) return la.CreateEmptyFile<LocalFilePath, LocalDirectoryPath>(lp, fileName, canWrite);
-            else if (accesser is GoogleDriveAccesser ga && path is GoogleDirectoryPath gp) return ga.CreateEmptyFile<GoogleFilePath, GoogleDirectoryPath>(gp, fileName, canWrite);
-            else throw new TypeAccessException($"在り得ないはずの型キャスト{path} {fileName}");
+            using (accesser) return await accesser.CreateEmptyFile(path, fileName, canWrite);
         }
         public void DeleteFile<FileT>(FileT path, FileSystemType fileType)
             where FileT : DriveItemPath, IFilePath

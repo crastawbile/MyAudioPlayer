@@ -173,16 +173,6 @@ namespace Crast.Accesser.DriveAccesser{
             IsPartOf(upperPermissions);//権限外なら例外が出る
         }
 
-        //指定した権限がこの権限内なら指定した権限からAccesserを生成する処理
-        //単純に権限からAccesserを作るときはAccesserのコンストラクタでいい。
-        //→accesserのコンストラクタに、上位権限引数を与えた方がいいのでは？
-
-        public LocalDriveAccesser CreateLocalDriveAccesser(FileSystemPermissionBundle permission, bool allowEmpty = false, bool singleOnly = false){
-            if (!allowEmpty && IsEmpty) throw new ArgumentException("空の権限でのaccesser生成は許可しない");
-            if (Contains(permission)) { return new LocalDriveAccesser(permission.GetPart(DriveTypeEnum.LocalDrive), allowEmpty, singleOnly); }
-            throw new ArgumentException($"このインスタンスに以下のアクセス権限はない。{permission}");
-        }
-
         //権限チェック
         //空権限は全ての権限に所属する扱い。
 

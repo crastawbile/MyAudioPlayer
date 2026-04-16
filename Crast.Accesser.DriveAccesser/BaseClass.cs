@@ -22,7 +22,7 @@ namespace Crast.Accesser.DriveAccesser{
     /// <summary>
     /// 個別権限に対応するAccesserの、非ジェネリックな共通インターフェイス。
     /// </summary>
-    public interface IDriveAccesser {
+    public interface IDriveAccesser : IDisposable{
         public FileSystemPermission? Permission { get; init; }
         #region Permissionのプロパティを直接呼び出せるようにするためのプロパティ群
         public DriveTypeEnum? DriveType => Permission?.DriveType;
@@ -96,6 +96,7 @@ namespace Crast.Accesser.DriveAccesser{
             }
         }
         public bool IsEmpty { get; init; }
+        public virtual void Dispose() {}
         protected void CheckEmpty() { if (IsEmpty) throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない"); }
 
         // 権限と存在を統合的にチェックする内部メソッド
