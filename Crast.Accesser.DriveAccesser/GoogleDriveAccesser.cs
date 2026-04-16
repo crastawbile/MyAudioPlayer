@@ -22,7 +22,7 @@
         public override bool Exists(bool force = false){
             if (this.InBank()) return true;
             if (!force) return false;
-            var accsser = new GoogleDriveAccesser(FileSystemPermissionBundle.Master.NarrowPath(this), singleOnly = false);
+            var accsser = new GoogleDriveAccesser(FileSystemPermissionBundle.Master.NarrowPath(this), singleOnly : false);
             return accsser.ItemExists(this);
         }
     }
@@ -67,9 +67,9 @@
         public static GoogleDriveMetadata? FromBank(this GoogleDrivePath path, bool force = false){
             if (B.TryGetValue(path, out var data)) return data;
             if (force){
-                var accsser = new GoogleDriveAccesser(FileSystemPermissionBundle.Master.NarrowPath(path), singleOnly = false);
+                var accsser = new GoogleDriveAccesser(FileSystemPermissionBundle.Master.NarrowPath(path), singleOnly : false);
                 if (!accsser.ItemExists(path)) return null;
-                data = accsser.Metadata;
+                data = accsser.GetItemInfo(path).Metadata!;
                 Add(data);
                 return data;
             }
@@ -81,9 +81,87 @@
     }
 
 
-    //現状、ダミー実装すらできていない。
-    internal class GoogleDriveAccesser:SingleDriveAccesserGeneric<GoogleDrivePath>{
-        
+    //現状、ダミー実装のみ。
+    internal class GoogleDriveAccesser : SingleDriveAccesserGeneric<GoogleDrivePath>
+    {
+        public GoogleDriveAccesser(FileSystemPermissionBundle permission, bool allowEmpty = false, bool singleOnly = true) : base(permission, allowEmpty, singleOnly)
+        {
+        }
+
+        public override Task AppendFileAsync<FileT>(FileT path, string text, bool withBreak = false)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override void ClearDirectory<DirectoryT>(DirectoryT path, bool recursive = false)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override DirectoryT CreateDirectory<DirectoryT>(DirectoryT path, string name, bool canWrite = false)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override FileT CreateEmptyFile<FileT, DirectoryT>(DirectoryT path, string name, bool canWrite = false)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override void DeleteDirectory<DirectoryT>(DirectoryT path, PermissionScope scope = PermissionScope.SelfOnly)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override void DeleteFile<FileT>(FileT path)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(DirectoryT path, FileSystemAccessLevel requiredLevel = FileSystemAccessLevel.ReadOnly, bool recursive = false)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override DriveItemInfo GetItemInfo(GoogleDrivePath path)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override bool ItemExists(GoogleDrivePath path)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path) where dataT : default
+        {
+            throw new NotImplementedException();
+        }
+
+        public override Task SaveObjectAsync<dataT, FileT>(FileT path, dataT data)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override Task SaveRawAsync<FileT>(FileT path, byte[] data)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override Task SaveStreamAsync<FileT>(FileT path, Stream stream)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override Task TransferToAsync<T0, T1, FileT>(FileT readpath, SingleDriveAccesserGeneric<T0> target, T1 targetPath)
+        {
+            throw new NotImplementedException();
+        }
+
+        protected override Task<Stream> OpenReadStreamAsync<FileT>(FileT path)
+        {
+            throw new NotImplementedException();
+        }
     }
 
 

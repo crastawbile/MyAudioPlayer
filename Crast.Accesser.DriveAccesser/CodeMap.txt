@@ -145,6 +145,8 @@ FileSystemPermissionBundle._rootにハードコードしている原版を、jso
 
 FileSystemPermission.IsItemAllowed()は唯一のDriveItemInfoを引数型とするメソッドだが、これは適正なのか。
 
+FileSystemPermission.IncludeItemPathはPermissionScopeReachHistoryを利用しているが、LocalDriveの場合は絶対パスの文字列の比較で済むため、処理を分けるべき。
+
 GoogleItemPath.parentにもforce引数を追加して、キャッシュを無視してGoogleDriveAPIを呼び出すオプションを追加した方がいいのではないか。
 
 上位権限と指定権限から具体的なaccesserを生成するメソッドがFileSystemPermissionBundleに存在しているが、個々のDriveAccesserに持たせるべきではないか。
@@ -160,6 +162,6 @@ GoogleDriveAccesserを作り始める前に、既存部分の修正と、GoogleD
 
 IDriveAccesser系列に関しては、全部internalで大丈夫っぽい……？
 →基底のIDriveAccesserのみpublicで公開、実装クラスはinternalにするため、トリプルディスパッチの前段をdynamicで踏みつぶす形で修正中。
-
+→完了。
 
 ＞＞＞

@@ -55,7 +55,7 @@
             if (p.IsEmpty) throw new ArgumentException($"許可されていないアクセスです: {path}   {Permissions}");
             return CreateDriveAccesser(p);
         }
-        public DriveItemPath CreateEmptyFile<DirectoryT>(DirectoryT path, FileSystemType fileType, string fileName, bool canWrite = false)
+        public async Task<IFilePath> CreateEmptyFile<DirectoryT>(DirectoryT path, FileSystemType fileType, string fileName, bool canWrite = false)
             where DirectoryT : DriveItemPath, IDirectoryPath
         {
             var accesser = GetTemporaryAccesser(
@@ -64,6 +64,7 @@
                 requiredIfExist: canWrite ? FileSystemAccessLevel.WriteOnly : FileSystemAccessLevel.None,
                 requiredIfNotExist: FileSystemAccessLevel.CreateOnly
             );
+            return await accesser.CreateEmptyFile(path, fileName, canWrite);
             if (accesser is LocalDriveAccesser la && path is LocalDirectoryPath lp) return la.CreateEmptyFile<LocalFilePath, LocalDirectoryPath>(lp, fileName, canWrite);
             else if (accesser is GoogleDriveAccesser ga && path is GoogleDirectoryPath gp) return ga.CreateEmptyFile<GoogleFilePath, GoogleDirectoryPath>(gp, fileName, canWrite);
             else throw new TypeAccessException($"在り得ないはずの型キャスト{path} {fileName}");

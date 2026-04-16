@@ -1,8 +1,4 @@
-﻿
-
-using static System.Net.WebRequestMethods;
-
-/// <summary>
+﻿/// <summary>
 /// 各Drive用のクラスで継承するためのクラスをまとめたファイル。
 /// </summary>
 
@@ -45,10 +41,10 @@ namespace Crast.Accesser.DriveAccesser{
         public bool IsEmpty { get; init; }
         // --- ドライブ ⇔ 変数 (JSON等で抽象化) ---
         // T型のデータを直接保存/読み込み。内部でStreamとシリアライザを回す
-        public abstract Task SaveObjectAsync<dataT>(IFilePath path, dataT data);
+        public abstract Task SaveObjectAsync(IFilePath path, object data);
         public abstract Task SaveRawAsync(IFilePath path, byte[] data);  // wavなどのバイナリ用
         public abstract Task AppendFileAsync(IFilePath path, string text, bool withBreak = false);
-        public abstract Task<dataT?> LoadObjectAsync<dataT>(IFilePath path);
+        public abstract Task<dataT?> LoadObjectAsync<dataT,noneT>(IFilePath path);
 
         // --- 拡張：ファイル管理 ---
         public abstract Task<IFilePath> CreateEmptyFile(IDirectoryPath path, string name, bool canWrite = false);
@@ -148,7 +144,7 @@ namespace Crast.Accesser.DriveAccesser{
         // --- ドライブ ⇔ 変数 (JSON等で抽象化) ---
         // T型のデータを直接保存/読み込み。内部でStreamとシリアライザを回す
         public abstract Task SaveObjectAsync<dataT, FileT>(FileT path, dataT data) where FileT : pathT, IFilePath;
-        async Task IDriveAccesser.SaveObjectAsync<dataT>(IFilePath path, dataT data){
+        async Task IDriveAccesser.SaveObjectAsync(IFilePath path, object data){
             if (path is pathT){
                 await (Task)((dynamic)this).SaveObjectAsync((dynamic)path, data);
             }else{
@@ -172,7 +168,7 @@ namespace Crast.Accesser.DriveAccesser{
             }
         }
         public abstract Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path) where FileT : pathT, IFilePath;
-        async Task<dataT?> IDriveAccesser.LoadObjectAsync<dataT>(IFilePath path) where dataT : default{
+        async Task<dataT?> IDriveAccesser.LoadObjectAsync<dataT, noneT>(IFilePath path) where dataT : default{
             if (path is pathT){
                 return await (Task<dataT?>)((dynamic)this).LoadObjectAsync<dataT>((dynamic)path);
             }else{
