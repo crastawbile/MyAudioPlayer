@@ -95,24 +95,40 @@ namespace Crast.Accesser.DriveAccesser{
                 _ => throw new ArgumentException($"未定義のパス型{path}")
             };
         }
-        public override async Task SaveRawAsync<FileT>(FileT path, byte[] data){
-            ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.None);
-            await File.WriteAllBytesAsync(
-                path.Value,
-                data
-            );
-        }
         public override async Task SaveObjectAsync<dataT, FileT>(FileT path, dataT data){
-            ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.None);
+            ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.WriteCreate);
             await File.WriteAllTextAsync(
                 path.Value,
                 JsonConvert.SerializeObject(data, Formatting.Indented)
             );
         }
+        public override async Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path)
+            where dataT : default
+        {
+            ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
+            var json = await System.IO.File.ReadAllTextAsync(path.Value, Encoding.UTF8);
+            return JsonConvert.DeserializeObject<dataT>(json);
+        }
+        public override async Task SaveRawAsync<FileT>(FileT path, byte[] data){
+            ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.WriteCreate);
+            await File.WriteAllBytesAsync(
+                path.Value,
+                data
+            );
+        }
+        public override async Task<byte[]> LoadRawAsync<FileT>(FileT path){
+            ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
+            return await File.ReadAllBytesAsync(path.Value);
+        }
         public override async Task AppendFileAsync<FileT>(FileT path, string text, bool withBreak = false){
             ValidateAccess(path, FileSystemAccessLevel.AppendOnly, FileSystemAccessLevel.None);
             var content = withBreak ? text + Environment.NewLine : text;
             await File.AppendAllTextAsync(path.Value, content);
+        }
+        public override async IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null){
+            ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
+            using var reader = new StreamReader(path.Value, encoding ?? Config.Encoding);
+            while (await reader.ReadLineAsync() is { } line)yield return line;
         }
         public override FileT CreateEmptyFile<FileT, DirectoryT>(DirectoryT path, string name, bool canWrite = false){
             var filePathString = System.IO.Path.Combine(path.Value, name);
@@ -193,13 +209,6 @@ namespace Crast.Accesser.DriveAccesser{
                 var info = DriveItemInfo.From(file);
                 if (Permission!.IsItemAllowed(info)) file.Delete();
             }
-        }
-        public override async Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path)
-            where dataT : default
-        {
-            ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
-            var json = await System.IO.File.ReadAllTextAsync(path.Value, Encoding.UTF8);
-            return JsonConvert.DeserializeObject<dataT>(json);
         }
 
         protected override async Task<Stream> OpenReadStreamAsync<FileT>(FileT path){

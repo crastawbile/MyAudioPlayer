@@ -1,4 +1,5 @@
 ﻿using System.Security;
+using System.Text;
 
 namespace Crast.Accesser.DriveAccesser{
 
@@ -62,97 +63,68 @@ namespace Crast.Accesser.DriveAccesser{
         public async Task<IFilePath> CreateEmptyFile<FileT>(FileT path, FileSystemType fileType, string fileName, bool canWrite = false)
         where FileT : DriveItemPath, IDirectoryPath
         {
-            var accesser = GetTemporaryAccesser(
+            using var accesser = GetTemporaryAccesser(
                 path: path,
                 fileType: fileType,
                 requiredIfExist: canWrite ? FileSystemAccessLevel.WriteOnly : FileSystemAccessLevel.None,
                 requiredIfNotExist: FileSystemAccessLevel.CreateOnly
             );
-            using (accesser) return await accesser.CreateEmptyFile(path, fileName, canWrite);
+            return await accesser.CreateEmptyFile(path, fileName, canWrite);
         }
-        public void DeleteFile<FileT>(FileT path, FileSystemType fileType)
+        public async Task DeleteFile<FileT>(FileT path, FileSystemType fileType)
             where FileT : DriveItemPath, IFilePath
         {
-            var accesser = GetTemporaryAccesser(
+            using var accesser = GetTemporaryAccesser(
                 path: path,
                 fileType: fileType,
                 requiredIfExist: FileSystemAccessLevel.DeleteOnly,
                 requiredIfNotExist: FileSystemAccessLevel.All
             );
-            if (accesser is LocalDriveAccesser la && path is LocalFilePath lp) la.DeleteFile(lp);
-            else if (accesser is GoogleDriveAccesser ga && path is GoogleFilePath gp) ga.DeleteFile(gp);
-            else throw new TypeAccessException($"在り得ないはずの型キャスト{path}");
+            await accesser.DeleteFile(path);
         }
 
-        public DriveItemPath CreateDirectory<DirectoryT>(DirectoryT path, string name)
+        public async Task<IDirectoryPath> CreateDirectory<DirectoryT>(DirectoryT path, string name)
             where DirectoryT : DriveItemPath, IDirectoryPath
         {
-            var accesser = GetTemporaryAccesser(
+            using var accesser = GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemType.Directory,
                 requiredIfExist: FileSystemAccessLevel.All,
                 requiredIfNotExist: FileSystemAccessLevel.CreateOnly
             );
-            switch ((path, accesser)){
-                case (LocalDirectoryPath localPath, LocalDriveAccesser localAccesser):
-                    return localAccesser.CreateDirectory(localPath, name);
-                case (GoogleDirectoryPath googlePath, GoogleDriveAccesser googleAccesser):
-                    return googleAccesser.CreateDirectory(googlePath, name);
-                default:
-                    throw new TypeAccessException($"在り得ないはずの型キャスト{path} {name}");
-            }
+            return await accesser.CreateDirectory(path, name);
         }
-        public void DeleteDirectory<DirectoryT>(DirectoryT path, PermissionScope scope = PermissionScope.SelfOnly)
+        public async Task DeleteDirectory<DirectoryT>(DirectoryT path, PermissionScope scope = PermissionScope.SelfOnly)
             where DirectoryT : DriveItemPath, IDirectoryPath
         {
-            var accesser = GetTemporaryAccesser(
+            using var accesser = GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemType.Directory,
                 requiredIfExist: FileSystemAccessLevel.ReadDelete,
                 requiredIfNotExist: FileSystemAccessLevel.All
             );
-            switch ((path, accesser)){
-                case (LocalDirectoryPath localPath, LocalDriveAccesser localAccesser):
-                    localAccesser.DeleteDirectory(localPath, scope);
-                    break;
-                case (GoogleDirectoryPath googlePath, GoogleDriveAccesser googleAccesser):
-                    googleAccesser.DeleteDirectory(googlePath, scope);
-                    break;
-                default:
-                    throw new TypeAccessException($"在り得ないはずの型キャスト{path}");
-            }
+            await accesser.DeleteDirectory(path, scope);
         }
-        public void ClearDirectory<DirectoryT>(DirectoryT path, bool recursive = false)
+        public async Task ClearDirectory<DirectoryT>(DirectoryT path, bool recursive = false)
             where DirectoryT : DriveItemPath, IDirectoryPath
         {
-            var accesser = GetTemporaryAccesser(
+            using var accesser = GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemType.Directory,
                 requiredIfExist: FileSystemAccessLevel.ReadDelete,
                 requiredIfNotExist: FileSystemAccessLevel.None
             );
-            switch ((path, accesser)){
-                case (LocalDirectoryPath localPath, LocalDriveAccesser localAccesser):
-                    localAccesser.ClearDirectory(localPath, recursive);
-                    break;
-                case (GoogleDirectoryPath googlePath, GoogleDriveAccesser googleAccesser):
-                    googleAccesser.ClearDirectory(googlePath, recursive);
-                    break;
-                default:
-                    throw new TypeAccessException($"在り得ないはずの型キャスト{path}");
-            }
+            await accesser.ClearDirectory(path, recursive);
         }
 
-        public DriveItemInfo GetItemInfo(DriveItemPath path){
-            var accesser = GetTemporaryAccesser(
+        public async Task<DriveItemInfo> GetItemInfo(DriveItemPath path){
+            using var accesser = GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemType.All,
                 requiredIfExist: FileSystemAccessLevel.ReadOnly,
                 requiredIfNotExist: FileSystemAccessLevel.None
             );
-            if (accesser is LocalDriveAccesser la && path is LocalFilePath lp) return la.GetItemInfo(lp);
-            else if (accesser is GoogleDriveAccesser ga && path is GoogleFilePath gp) return ga.GetItemInfo(gp);
-            else throw new TypeAccessException($"在り得ないはずの型キャスト{path}");
+            return await accesser.GetItemInfo(path);
         }
         public async Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(
             DirectoryT path,
@@ -161,80 +133,91 @@ namespace Crast.Accesser.DriveAccesser{
         )
             where DirectoryT : DriveItemPath, IDirectoryPath
         {
-            var accesser = GetTemporaryAccesser(
+            using var accesser = GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemType.Directory,
                 requiredIfExist: FileSystemAccessLevel.ReadOnly,
                 requiredIfNotExist: FileSystemAccessLevel.None
             );
-            if (accesser is LocalDriveAccesser la && path is LocalDirectoryPath lp) return await la.GetFileListAsync(lp, requiredLevel, recursive);
-            else if (accesser is GoogleDriveAccesser ga && path is GoogleDirectoryPath gp) return await ga.GetFileListAsync(gp, requiredLevel, recursive);
-            else throw new TypeAccessException($"在り得ないはずの型キャスト{path}");
+            return await accesser.GetFileListAsync(path, requiredLevel, recursive);
+        }
+
+        public async Task SaveObjectAsync<FileT>(FileT path, object data)
+            where FileT : DriveItemPath, IFilePath
+        {
+            using var accesser = GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                requiredIfExist: FileSystemAccessLevel.WriteOnly,
+                requiredIfNotExist: FileSystemAccessLevel.WriteCreate
+            );
+            await accesser.SaveObjectAsync(path, data);
+        }
+        public async Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path)
+            where FileT : DriveItemPath, IFilePath
+        {
+            using var accesser = GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                requiredIfExist: FileSystemAccessLevel.ReadOnly,
+                requiredIfNotExist: FileSystemAccessLevel.None
+            );
+            return await accesser.LoadObjectAsync<dataT, FileT>(path);
         }
         public async Task SaveRawAsync<FileT>(FileT path, byte[] data)
             where FileT : DriveItemPath, IFilePath
         {
-            var accesser = GetTemporaryAccesser(
+            using var accesser = GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemType.All,
                 requiredIfExist: FileSystemAccessLevel.WriteOnly,
-                requiredIfNotExist: FileSystemAccessLevel.None
+                requiredIfNotExist: FileSystemAccessLevel.WriteCreate
             );
-            if (accesser is LocalDriveAccesser la && path is LocalFilePath lp) await la.SaveRawAsync(lp, data);
-            else if (accesser is GoogleDriveAccesser ga && path is GoogleFilePath gp) await ga.SaveRawAsync(gp, data);
-            else throw new TypeAccessException($"在り得ないはずの型キャスト{path}");
+            await accesser.SaveRawAsync(path, data);
         }
-        public async Task SaveObjectAsync<dataT, FileT>(FileT path, dataT data)
+        public async Task<byte[]> LoadRawAsync<FileT>(FileT path)
             where FileT : DriveItemPath, IFilePath
         {
-            var accesser = GetTemporaryAccesser(
+            using var accesser = GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemType.All,
-                requiredIfExist: FileSystemAccessLevel.WriteOnly,
+                requiredIfExist: FileSystemAccessLevel.ReadOnly,
                 requiredIfNotExist: FileSystemAccessLevel.None
             );
-            if (accesser is LocalDriveAccesser la && path is LocalFilePath lp) await la.SaveObjectAsync(lp, data);
-            else if (accesser is GoogleDriveAccesser ga && path is GoogleFilePath gp) await ga.SaveObjectAsync(gp, data);
-            else throw new TypeAccessException($"在り得ないはずの型キャスト{path}");
+            return await accesser.LoadRawAsync(path);
         }
         public async Task AppendFileAsync<FileT>(FileT path, string text, bool withBreak = false)
             where FileT : DriveItemPath, IFilePath
         {
-            var accesser = GetTemporaryAccesser(
+            using var accesser = GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemTypeManager.Text,
                 requiredIfExist: FileSystemAccessLevel.AppendOnly,
                 requiredIfNotExist: FileSystemAccessLevel.None
             );
-            if (accesser is LocalDriveAccesser la && path is LocalFilePath lp) await la.AppendFileAsync(lp, text, withBreak);
-            else if (accesser is GoogleDriveAccesser ga && path is GoogleFilePath gp) await ga.AppendFileAsync(gp, text, withBreak);
-            else throw new TypeAccessException($"在り得ないはずの型キャスト{path}");
+            await accesser.AppendFileAsync(path, text, withBreak);
         }
-        public async Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path)
+        public IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null)
             where FileT : DriveItemPath, IFilePath
         {
             var accesser = GetTemporaryAccesser(
                 path: path,
-                fileType: FileSystemType.All,
+                fileType: FileSystemTypeManager.Text,
                 requiredIfExist: FileSystemAccessLevel.ReadOnly,
                 requiredIfNotExist: FileSystemAccessLevel.None
             );
-            if (accesser is LocalDriveAccesser la && path is LocalFilePath lp) return await la.LoadObjectAsync<dataT, LocalFilePath>(lp);
-            else if (accesser is GoogleDriveAccesser ga && path is GoogleFilePath gp) return await ga.LoadObjectAsync<dataT, GoogleFilePath>(gp);
-            else throw new TypeAccessException($"在り得ないはずの型キャスト{path}");
+            return accesser.ReadLinesAsync(path,encoding);
         }
-        public async Task TransferToAsync<T0, T1, FileT>(FileT readPath, SingleDriveAccesserGeneric<T0> target, T1 targetPath)
-            where FileT : DriveItemPath, IFilePath where T0 : DriveItemPath where T1 : T0, IFilePath
+        public async Task TransferToAsync<FileT1,FileT2>(FileT1 readPath, IDriveAccesser target, FileT2 targetPath)
+            where FileT1 : DriveItemPath, IFilePath where FileT2 : DriveItemPath, IFilePath
         {
-            var reader = GetTemporaryAccesser(
+            using var reader = GetTemporaryAccesser(
                 path: readPath,
                 fileType: FileSystemType.All,
                 requiredIfExist: FileSystemAccessLevel.ReadOnly,
                 requiredIfNotExist: FileSystemAccessLevel.None
             );
-            if (reader is LocalDriveAccesser la && readPath is LocalFilePath lp) await la.TransferToAsync(lp, target, targetPath);
-            else if (reader is GoogleDriveAccesser ga && readPath is GoogleFilePath gp) await ga.TransferToAsync(gp, target, targetPath);
-            else throw new TypeAccessException($"在り得ないはずの型キャスト{readPath}");
+            await reader.TransferToAsync(readPath, target, targetPath);
         }
     }
 

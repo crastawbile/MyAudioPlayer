@@ -1,4 +1,8 @@
-﻿/// <summary>
+﻿
+
+using System.Text;
+
+/// <summary>
 /// 各Drive用のクラスで継承するためのクラスをまとめたファイル。
 /// </summary>
 
@@ -42,9 +46,12 @@ namespace Crast.Accesser.DriveAccesser{
         // --- ドライブ ⇔ 変数 (JSON等で抽象化) ---
         // T型のデータを直接保存/読み込み。内部でStreamとシリアライザを回す
         public abstract Task SaveObjectAsync(IFilePath path, object data);
+        public abstract Task<dataT?> LoadObjectAsync<dataT, noneT>(IFilePath path);
         public abstract Task SaveRawAsync(IFilePath path, byte[] data);  // wavなどのバイナリ用
+        public abstract Task<byte[]> LoadRawAsync(IFilePath path);
         public abstract Task AppendFileAsync(IFilePath path, string text, bool withBreak = false);
-        public abstract Task<dataT?> LoadObjectAsync<dataT,noneT>(IFilePath path);
+        public abstract IAsyncEnumerable<string> ReadLinesAsync(IFilePath path, Encoding? encoding);
+
 
         // --- 拡張：ファイル管理 ---
         public abstract Task<IFilePath> CreateEmptyFile(IDirectoryPath path, string name, bool canWrite = false);
@@ -152,10 +159,26 @@ namespace Crast.Accesser.DriveAccesser{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
         }
+        public abstract Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path) where FileT : pathT, IFilePath;
+        async Task<dataT?> IDriveAccesser.LoadObjectAsync<dataT, noneT>(IFilePath path) where dataT : default{
+            if (path is pathT){
+                return await (Task<dataT?>)((dynamic)this).LoadObjectAsync<dataT>((dynamic)path);
+            }else{
+                throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
+            }
+        }
         public abstract Task SaveRawAsync<FileT>(FileT path, byte[] data) where FileT : pathT, IFilePath;  // wavなどのバイナリ用
         async Task IDriveAccesser.SaveRawAsync(IFilePath path, byte[] data){
             if (path is pathT){
                 await (Task)((dynamic)this).SaveRawAsync((dynamic)path, data);
+            }else{
+                throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
+            }
+        }
+        public abstract Task<byte[]> LoadRawAsync<FileT>(FileT path) where FileT : pathT, IFilePath;
+        async Task<byte[]> IDriveAccesser.LoadRawAsync(IFilePath path){
+            if (path is pathT){
+                return await (Task<byte[]>)((dynamic)this).LoadRawAsync((dynamic)path);
             }else{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
@@ -168,14 +191,15 @@ namespace Crast.Accesser.DriveAccesser{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
         }
-        public abstract Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path) where FileT : pathT, IFilePath;
-        async Task<dataT?> IDriveAccesser.LoadObjectAsync<dataT, noneT>(IFilePath path) where dataT : default{
-            if (path is pathT){
-                return await (Task<dataT?>)((dynamic)this).LoadObjectAsync<dataT>((dynamic)path);
-            }else{
-                throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
+        public abstract IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null) where FileT : pathT, IFilePath;
+        IAsyncEnumerable<string> IDriveAccesser.ReadLinesAsync(IFilePath path, Encoding? encoding){
+            if (path is pathT p){
+                return ((dynamic)this).ReadLinesAsync((dynamic)p, encoding);
+            } else {
+                throw new InvalidOperationException("パスの型不一致");
             }
         }
+
 
         // --- 拡張：ファイル管理 ---
         public abstract FileT CreateEmptyFile<FileT, DirectoryT>(DirectoryT path, string name, bool canWrite = false) where DirectoryT : pathT, IDirectoryPath where FileT : pathT, IFilePath;
@@ -297,9 +321,11 @@ namespace Crast.Accesser.DriveAccesser{
         public override Task SaveObjectAsync<T, FileT>(FileT path, T data) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override Task<T?> LoadObjectAsync<T, FileT>(FileT path) where T : default => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override Task SaveRawAsync<FileT>(FileT path, byte[] data) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override Task<byte[]> LoadRawAsync<FileT>(FileT path) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         protected override Task<Stream> OpenReadStreamAsync<FileT>(FileT path) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override Task SaveStreamAsync<FileT>(FileT path, Stream stream) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override Task TransferToAsync<T0, T1, FileT>(FileT readpath, SingleDriveAccesserGeneric<T0> target, T1 targetPath) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+
     }
 
 
