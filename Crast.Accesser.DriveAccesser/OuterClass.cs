@@ -186,7 +186,30 @@ namespace Crast.Accesser.DriveAccesser{
             );
             return await accesser.LoadRawAsync(path);
         }
-        public async Task AppendFileAsync<FileT>(FileT path, string text, bool withBreak = false)
+        public async Task SaveTextAsync<FileT>(FileT path, string text, Encoding? encoding = null)
+            where FileT : DriveItemPath, IFilePath
+        {
+            using var accesser = GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                requiredIfExist: FileSystemAccessLevel.WriteOnly,
+                requiredIfNotExist: FileSystemAccessLevel.WriteCreate
+            );
+            await accesser.SaveTextAsync(path,text,encoding);
+        }
+        public async Task<string> LoadTextAsync<FileT>(FileT path, Encoding? encoding = null)
+            where FileT : DriveItemPath, IFilePath
+        {
+            using var accesser = GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                requiredIfExist: FileSystemAccessLevel.ReadOnly,
+                requiredIfNotExist: FileSystemAccessLevel.None
+            );
+            return await accesser.LoadTextAsync(path, encoding);
+        }
+
+        public async Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false)
             where FileT : DriveItemPath, IFilePath
         {
             using var accesser = GetTemporaryAccesser(
@@ -195,7 +218,7 @@ namespace Crast.Accesser.DriveAccesser{
                 requiredIfExist: FileSystemAccessLevel.AppendOnly,
                 requiredIfNotExist: FileSystemAccessLevel.None
             );
-            await accesser.AppendFileAsync(path, text, withBreak);
+            await accesser.AppendTextAsync(path, text, withBreak);
         }
         public IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null)
             where FileT : DriveItemPath, IFilePath

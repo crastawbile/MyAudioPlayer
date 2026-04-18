@@ -49,8 +49,10 @@ namespace Crast.Accesser.DriveAccesser{
         public abstract Task<dataT?> LoadObjectAsync<dataT, noneT>(IFilePath path);
         public abstract Task SaveRawAsync(IFilePath path, byte[] data);  // wavなどのバイナリ用
         public abstract Task<byte[]> LoadRawAsync(IFilePath path);
-        public abstract Task AppendFileAsync(IFilePath path, string text, bool withBreak = false);
+        public abstract Task AppendTextAsync(IFilePath path, string text, bool withBreak = false);
         public abstract IAsyncEnumerable<string> ReadLinesAsync(IFilePath path, Encoding? encoding);
+        public abstract Task SaveTextAsync(IFilePath path, string text, Encoding? encoding = null);
+        public abstract Task<string> LoadTextAsync(IFilePath path, Encoding? encoding = null);
 
 
         // --- 拡張：ファイル管理 ---
@@ -183,8 +185,8 @@ namespace Crast.Accesser.DriveAccesser{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
         }
-        public abstract Task AppendFileAsync<FileT>(FileT path, string text, bool withBreak = false) where FileT : pathT, IFilePath;
-        async Task IDriveAccesser.AppendFileAsync(IFilePath path, string text, bool withBreak = false){
+        public abstract Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false) where FileT : pathT, IFilePath;
+        async Task IDriveAccesser.AppendTextAsync(IFilePath path, string text, bool withBreak = false){
             if (path is pathT){
                 await (Task)((dynamic)this).AppendFileAsync((dynamic)path, text, withBreak);
             }else{
@@ -197,6 +199,22 @@ namespace Crast.Accesser.DriveAccesser{
                 return ((dynamic)this).ReadLinesAsync((dynamic)p, encoding);
             } else {
                 throw new InvalidOperationException("パスの型不一致");
+            }
+        }
+        public abstract Task SaveTextAsync<FileT>(FileT path, string text, Encoding? encoding = null) where FileT : pathT, IFilePath;
+        async Task IDriveAccesser.SaveTextAsync(IFilePath path, string text, Encoding? encoding){
+            if (path is pathT){
+                await ((dynamic)this).SaveTextAsync((dynamic)path, text, encoding);
+            }else{
+                throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
+            }
+        }
+        public abstract Task<string> LoadTextAsync<FileT>(FileT path, Encoding? encoding = null) where FileT : pathT, IFilePath;
+        async Task<string> IDriveAccesser.LoadTextAsync(IFilePath path, Encoding? encoding){
+            if (path is pathT){
+                return await ((dynamic)this).LoadTextAsync((dynamic)path, encoding);
+            }else{
+                throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
         }
 
@@ -317,7 +335,7 @@ namespace Crast.Accesser.DriveAccesser{
         public override DirectoryT CreateDirectory<DirectoryT>(DirectoryT path, string name, bool canWrite = false) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override void DeleteDirectory<DirectoryT>(DirectoryT path, PermissionScope scope = PermissionScope.SelfOnly) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override void ClearDirectory<DirectoryT>(DirectoryT path, bool recursive = false) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
-        public override Task AppendFileAsync<FileT>(FileT path, string text, bool withBreak = false) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override Task SaveObjectAsync<T, FileT>(FileT path, T data) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override Task<T?> LoadObjectAsync<T, FileT>(FileT path) where T : default => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override Task SaveRawAsync<FileT>(FileT path, byte[] data) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
@@ -326,6 +344,9 @@ namespace Crast.Accesser.DriveAccesser{
         public override Task SaveStreamAsync<FileT>(FileT path, Stream stream) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override Task TransferToAsync<T0, T1, FileT>(FileT readpath, SingleDriveAccesserGeneric<T0> target, T1 targetPath) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
 
+        public override IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override Task SaveTextAsync<FileT>(FileT path, string text, Encoding? encoding = null) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override Task<string> LoadTextAsync<FileT>(FileT path, Encoding? encoding = null) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
     }
 
 

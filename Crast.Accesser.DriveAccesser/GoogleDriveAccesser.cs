@@ -88,7 +88,7 @@
         {
         }
 
-        public override Task AppendFileAsync<FileT>(FileT path, string text, bool withBreak = false)
+        public override Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false)
         {
             throw new NotImplementedException();
         }

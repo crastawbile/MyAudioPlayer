@@ -95,6 +95,7 @@ namespace Crast.Accesser.DriveAccesser{
                 _ => throw new ArgumentException($"未定義のパス型{path}")
             };
         }
+
         public override async Task SaveObjectAsync<dataT, FileT>(FileT path, dataT data){
             ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.WriteCreate);
             await File.WriteAllTextAsync(
@@ -120,7 +121,7 @@ namespace Crast.Accesser.DriveAccesser{
             ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
             return await File.ReadAllBytesAsync(path.Value);
         }
-        public override async Task AppendFileAsync<FileT>(FileT path, string text, bool withBreak = false){
+        public override async Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false){
             ValidateAccess(path, FileSystemAccessLevel.AppendOnly, FileSystemAccessLevel.None);
             var content = withBreak ? text + Environment.NewLine : text;
             await File.AppendAllTextAsync(path.Value, content);
@@ -130,6 +131,33 @@ namespace Crast.Accesser.DriveAccesser{
             using var reader = new StreamReader(path.Value, encoding ?? Config.Encoding);
             while (await reader.ReadLineAsync() is { } line)yield return line;
         }
+        public override async Task SaveTextAsync<FileT>(FileT path, string text,Encoding? encoding = null){
+            ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.WriteCreate);
+            using var stream = new FileStream(
+                        path.Value,
+                        FileMode.Create,
+                        FileAccess.Write,
+                        FileShare.None
+                        );
+            using var writer = new StreamWriter(stream, encoding ?? Config.Encoding);
+            await writer.WriteAsync(text);
+        }
+        public override async Task<string> LoadTextAsync<FileT>(FileT path, Encoding? encoding = null){
+            ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
+            using var stream = new FileStream(
+                path.Value,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read
+                );
+            using var reader = new StreamReader(
+                stream,
+                encoding ?? Config.Encoding,
+                detectEncodingFromByteOrderMarks: true
+                );
+            return await reader.ReadToEndAsync();
+        }
+
         public override FileT CreateEmptyFile<FileT, DirectoryT>(DirectoryT path, string name, bool canWrite = false){
             var filePathString = System.IO.Path.Combine(path.Value, name);
             var filePath = new LocalFilePath(filePathString);
