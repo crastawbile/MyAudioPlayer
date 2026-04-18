@@ -97,39 +97,67 @@ namespace Crast.Accesser.DriveAccesser{
         }
 
         public override async Task SaveObjectAsync<dataT, FileT>(FileT path, dataT data){
-            ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.WriteCreate);
-            await File.WriteAllTextAsync(
-                path.Value,
-                JsonConvert.SerializeObject(data, Formatting.Indented)
-            );
+            var json = JsonConvert.SerializeObject(data, Formatting.Indented);
+            await SaveTextAsync(path, json);
         }
         public override async Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path)
             where dataT : default
         {
-            ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
-            var json = await System.IO.File.ReadAllTextAsync(path.Value, Encoding.UTF8);
+            var json = await LoadTextAsync(path);
             return JsonConvert.DeserializeObject<dataT>(json);
         }
         public override async Task SaveRawAsync<FileT>(FileT path, byte[] data){
             ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.WriteCreate);
-            await File.WriteAllBytesAsync(
+            using var stream = new FileStream(
                 path.Value,
-                data
-            );
+                FileMode.Create,
+                FileAccess.Write,
+                FileShare.None,
+                4096,
+                true
+                );
+            await stream.WriteAsync(data, 0, data.Length);
         }
         public override async Task<byte[]> LoadRawAsync<FileT>(FileT path){
             ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
-            return await File.ReadAllBytesAsync(path.Value);
+            using var stream = new FileStream(
+                path.Value,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                4096,
+                true
+                );
+            var data = new byte[stream.Length];
+            await stream.ReadAsync(data, 0, (int)stream.Length);
+            return data;
         }
         public override async Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false){
             ValidateAccess(path, FileSystemAccessLevel.AppendOnly, FileSystemAccessLevel.None);
             var content = withBreak ? text + Environment.NewLine : text;
-            await File.AppendAllTextAsync(path.Value, content);
+            using var stream = new FileStream(
+                path.Value,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.Read,
+                4096,
+                true
+                );
+            using var writer = new StreamWriter(stream, Config.Encoding);
+            await writer.WriteAsync(content);
         }
         public override async IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null){
             ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
-            using var reader = new StreamReader(path.Value, encoding ?? Config.Encoding);
-            while (await reader.ReadLineAsync() is { } line)yield return line;
+            using var stream = new FileStream(
+                path.Value,
+                FileMode.Open,
+                FileAccess.Read,
+                FileShare.Read,
+                4096,
+                true
+                );
+            using var reader = new StreamReader(stream, encoding ?? Config.Encoding, detectEncodingFromByteOrderMarks: true);
+            while (await reader.ReadLineAsync() is { } line) yield return line;
         }
         public override async Task SaveTextAsync<FileT>(FileT path, string text,Encoding? encoding = null){
             ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.WriteCreate);
@@ -137,7 +165,9 @@ namespace Crast.Accesser.DriveAccesser{
                         path.Value,
                         FileMode.Create,
                         FileAccess.Write,
-                        FileShare.None
+                        FileShare.None,
+                        4096,
+                        true
                         );
             using var writer = new StreamWriter(stream, encoding ?? Config.Encoding);
             await writer.WriteAsync(text);
@@ -148,7 +178,9 @@ namespace Crast.Accesser.DriveAccesser{
                 path.Value,
                 FileMode.Open,
                 FileAccess.Read,
-                FileShare.Read
+                FileShare.Read,
+                4096,
+                true
                 );
             using var reader = new StreamReader(
                 stream,
@@ -166,7 +198,7 @@ namespace Crast.Accesser.DriveAccesser{
             }else{
                 ValidateAccess(filePath, FileSystemAccessLevel.None, FileSystemAccessLevel.CreateOnly);
             }
-            using (File.Create(filePath.Value)) { }
+            using (File.Create(filePath.Value)) { }// File.Create は内部的に FileShare.None を使う独占的な実装だが即時クローズするので影響は無いはず
             if (filePath is FileT f) return f;
             else throw new TypeAccessException($"在り得ないはずの型キャスト{filePath}");
         }

@@ -1,4 +1,6 @@
-﻿namespace Crast.Accesser.DriveAccesser{
+﻿using System.Text;
+
+namespace Crast.Accesser.DriveAccesser{
 
     public abstract record GoogleDrivePath : DriveItemPath{
         public override string Value { get; init; }
@@ -88,6 +90,11 @@
         {
         }
 
+        public override Task AppendRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data)
+        {
+            throw new NotImplementedException();
+        }
+
         public override Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false)
         {
             throw new NotImplementedException();
@@ -138,17 +145,37 @@
             throw new NotImplementedException();
         }
 
+        public override Task<byte[]> LoadRawAsync<FileT>(FileT path)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override Task<string> LoadTextAsync<FileT>(FileT path, Encoding? encoding = null)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null)
+        {
+            throw new NotImplementedException();
+        }
+
         public override Task SaveObjectAsync<dataT, FileT>(FileT path, dataT data)
         {
             throw new NotImplementedException();
         }
 
-        public override Task SaveRawAsync<FileT>(FileT path, byte[] data)
+        public override Task SaveRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data)
         {
             throw new NotImplementedException();
         }
 
         public override Task SaveStreamAsync<FileT>(FileT path, Stream stream)
+        {
+            throw new NotImplementedException();
+        }
+
+        public override Task SaveTextAsync<FileT>(FileT path, string text, Encoding? encoding = null)
         {
             throw new NotImplementedException();
         }

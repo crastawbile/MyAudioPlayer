@@ -164,7 +164,7 @@ namespace Crast.Accesser.DriveAccesser{
             );
             return await accesser.LoadObjectAsync<dataT, FileT>(path);
         }
-        public async Task SaveRawAsync<FileT>(FileT path, byte[] data)
+        public async Task SaveRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data)
             where FileT : DriveItemPath, IFilePath
         {
             using var accesser = GetTemporaryAccesser(
@@ -175,6 +175,18 @@ namespace Crast.Accesser.DriveAccesser{
             );
             await accesser.SaveRawAsync(path, data);
         }
+        public async Task AppendRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data)
+            where FileT : DriveItemPath, IFilePath
+        {
+            using var accesser = GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                requiredIfExist: FileSystemAccessLevel.AppendOnly,
+                requiredIfNotExist: FileSystemAccessLevel.AppendCreate
+            );
+            await accesser.AppendRawAsync(path, data);
+        }
+
         public async Task<byte[]> LoadRawAsync<FileT>(FileT path)
             where FileT : DriveItemPath, IFilePath
         {
