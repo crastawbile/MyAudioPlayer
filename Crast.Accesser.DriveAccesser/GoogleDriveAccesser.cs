@@ -9,8 +9,10 @@ namespace Crast.Accesser.DriveAccesser{
             CheckId(id);
             Value = id;
         }
-        public override GoogleDirectoryPath? Parent => this.InBank() ? (GoogleDirectoryPath?)this.FromBank().ParentId! : null;
-        protected bool CheckId(string id){
+        public override GoogleDirectoryPath? Parent => this.InBank() ? this.FromBank()?.ParentId : null;
+        public GoogleDirectoryPath? GetParent(bool force) => this.InBank() ? this.FromBank(force)?.ParentId : null;
+        public string? GetName(bool force) => this.InBank() ? this.FromBank(force)?.Name : null;
+        protected static bool CheckId(string id){
             if (string.IsNullOrWhiteSpace(id))
                 throw new ArgumentException("ID cannot be empty");
 
@@ -45,7 +47,7 @@ namespace Crast.Accesser.DriveAccesser{
         string Name,
         FileSystemType Type,
         long? Size,
-        GoogleDrivePath? ParentId = null,
+        GoogleDirectoryPath? ParentId = null,
         string? ETag = null
     )
     {
@@ -100,7 +102,7 @@ namespace Crast.Accesser.DriveAccesser{
             throw new NotImplementedException();
         }
 
-        public override void ClearDirectory<DirectoryT>(DirectoryT path, bool recursive = false)
+        public override void ClearDirectory<DirectoryT>(DirectoryT path, FileSystemType fileType = FileSystemType.All, bool recursive = false)
         {
             throw new NotImplementedException();
         }
@@ -110,7 +112,7 @@ namespace Crast.Accesser.DriveAccesser{
             throw new NotImplementedException();
         }
 
-        public override FileT CreateEmptyFile<FileT, DirectoryT>(DirectoryT path, string name, bool canWrite = false)
+        public override FileT CreateEmptyFile<FileT, DirectoryT>(DirectoryT path, string name, FileSystemType fileType, bool canWrite = false)
         {
             throw new NotImplementedException();
         }
@@ -125,8 +127,11 @@ namespace Crast.Accesser.DriveAccesser{
             throw new NotImplementedException();
         }
 
-        public override Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(DirectoryT path, FileSystemAccessLevel requiredLevel = FileSystemAccessLevel.ReadOnly, bool recursive = false)
-        {
+        public override Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(
+            DirectoryT path,
+            FileSystemType fileType = FileSystemType.All,
+            bool recursive = false
+        ){
             throw new NotImplementedException();
         }
 

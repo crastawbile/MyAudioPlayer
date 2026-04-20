@@ -1,4 +1,5 @@
 <Solution>
   <Project Path="Crast.Accesser.DriveAccesser/Crast.Accesser.DriveAccesser.csproj" Id="e6832a94-701b-482e-80b4-a4a94c166e61" />
+  <Project Path="Crast.Utilities.ExtensionMethods/Crast.Utilities.ExtensionMethods.csproj" Id="e169a02c-c8ff-465e-96d4-747e25797af7" />
   <Project Path="MyAudioPlayer/MyAudioPlayer.Outer.csproj" />
 </Solution>

@@ -94,7 +94,7 @@ GoogleItemPath.Parent及びGoogleItemPath.existsに使用
 DriveTypeEnum DriveType //LocalDrive、GoogleDriveなどのドライブ種を表すenum
 DriveItemPath Path
 PermissionScope Scope　//自身、子ファイル、孫以降ファイルの3種のFlagEnum
-FileSystemAccessLevel AccessLevel //Read、Append、Create、Delete、Writeの5種のFlagEnum
+FileSystemAccessLevel AccessLevel //Read、Append、Create、Delete、Writeの5種のFlagEnum。メタデータ読み取りは無権限で可能とする。
 FileSystemType FileType //拡張子やMIMEタイプなどに対応するenum
 機能：
 指定のDriveItemPathをアクセス範囲に含むかどうかの確認
@@ -136,24 +136,25 @@ TraficDriveManagerは、使い捨てAccesserのPathを追加の引数に。
 
 
 
+ex1,改善待機
+AccessGoogleDriveファイル上のあれこれは、DriveAccesserを前提とした構造を作り始める前のコードであるため、DriveAccesserとの整合性が無いのは当然とする。
+GoogleDriveAccesserは現状何の実装もなされていない。
+GoogleDriveAccesserを作り始める前に、既存部分の修正と、GoogleDriveを扱うために必要なクラスが十分かの確認を行う必要がある。
 
-ex1,改善予定
+
+ex2,改善予定
 
 FileSystemPermissionBundle._rootにハードコードしている原版を、jsonなどに外部化した方がいいのではないか。
 
-FileSystemPermission.IsItemAllowed()は唯一のDriveItemInfoを引数型とするメソッドだが、これは適正なのか。
-
 FileSystemPermission.IncludeItemPathはPermissionScopeReachHistoryを利用しているが、LocalDriveの場合は絶対パスの文字列の比較で済むため、処理を分けるべき。
-
-GoogleItemPath.parentにもforce引数を追加して、キャッシュを無視してGoogleDriveAPIを呼び出すオプションを追加した方がいいのではないか。
 
 適当に配置したエラー型は適切か否か。
 
 
-ex2,指摘された改善点
-AccessGoogleDriveファイル上のあれこれは、DriveAccesserを前提とした構造を作り始める前のコードであるため、DriveAccesserとの整合性が無いのは当然とする。
-GoogleDriveAccesserは現状何の実装もなされていない。
-GoogleDriveAccesserを作り始める前に、既存部分の修正と、GoogleDriveを扱うために必要なクラスが十分かの確認を行う必要がある。
+ex3,指摘された改善点
+
+
+
 
 
 ＞＞＞

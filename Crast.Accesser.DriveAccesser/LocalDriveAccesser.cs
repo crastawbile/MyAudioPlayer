@@ -1,5 +1,6 @@
 ﻿using System.Text;
 using Newtonsoft.Json;
+using Crast.Utilities.ExtensionMethods;
 
 
 namespace Crast.Accesser.DriveAccesser{
@@ -38,7 +39,7 @@ namespace Crast.Accesser.DriveAccesser{
         { }
 
         public override DriveItemInfo GetItemInfo(LocalDrivePath path){
-            ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
+            ValidateAccess(path, FileSystemAccessLevel.All, FileSystemAccessLevel.None);//メタデータ読み込みは無権限でも可能
             if (path is LocalFilePath){
                 var f = new FileInfo(path.Value);
                 return new DriveItemInfo(
@@ -64,7 +65,11 @@ namespace Crast.Accesser.DriveAccesser{
             }
 
         }
-        public override async Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(DirectoryT path, FileSystemAccessLevel requiredLevel = FileSystemAccessLevel.ReadOnly, bool recursive = false){
+        public override async Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(
+            DirectoryT path,
+            FileSystemType fileType = FileSystemType.All,
+            bool recursive = false
+            ){
             CheckEmpty();
 
             //指定したfolderの子に対するアクセス権限があるかどうかをまず確認
@@ -76,7 +81,10 @@ namespace Crast.Accesser.DriveAccesser{
             var di = new DirectoryInfo(path.Value);
 
             return di.GetFiles("*", option)
-                .Where(f => Permission.IncludeFileSystemType(f.Extension.FromExtension())) // 拡張子フィルタ適用
+                .Where(f => 
+                    f.Extension.FromExtension().InFlag(fileType)
+                    && Permission.IncludeFileSystemType(f.Extension.FromExtension())
+                ) // 拡張子フィルタ適用
                 .Select(f => new DriveItemInfo(
                     Name: f.Name,
                     DriveType: DriveTypeEnum.LocalDrive,
@@ -106,7 +114,7 @@ namespace Crast.Accesser.DriveAccesser{
             var json = await LoadTextAsync(path);
             return JsonConvert.DeserializeObject<dataT>(json);
         }
-        public override async Task SaveRawAsync<FileT>(FileT path, byte[] data){
+        public override async Task SaveRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data){
             ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.WriteCreate);
             using var stream = new FileStream(
                 path.Value,
@@ -116,7 +124,20 @@ namespace Crast.Accesser.DriveAccesser{
                 4096,
                 true
                 );
-            await stream.WriteAsync(data, 0, data.Length);
+            await stream.WriteAsync(data);
+        }
+        public override async Task AppendRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data)
+        {
+            ValidateAccess(path, FileSystemAccessLevel.AppendOnly, FileSystemAccessLevel.AppendCreate);
+            using var stream = new FileStream(
+                path.Value,
+                FileMode.Append,
+                FileAccess.Write,
+                FileShare.Read,
+                4096,
+                true
+                );
+            await stream.WriteAsync(data);
         }
         public override async Task<byte[]> LoadRawAsync<FileT>(FileT path){
             ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
@@ -129,7 +150,7 @@ namespace Crast.Accesser.DriveAccesser{
                 true
                 );
             var data = new byte[stream.Length];
-            await stream.ReadAsync(data, 0, (int)stream.Length);
+            await stream.ReadExactlyAsync(data.AsMemory());
             return data;
         }
         public override async Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false){
@@ -190,7 +211,8 @@ namespace Crast.Accesser.DriveAccesser{
             return await reader.ReadToEndAsync();
         }
 
-        public override FileT CreateEmptyFile<FileT, DirectoryT>(DirectoryT path, string name, bool canWrite = false){
+        public override FileT CreateEmptyFile<FileT, DirectoryT>(DirectoryT path, string name, FileSystemType fileType, bool canWrite = false){
+            if(!Permission!.FileType.HasFlag(fileType)) throw new UnauthorizedAccessException($"このファイルタイプの作成権限がありません: {fileType}");
             var filePathString = System.IO.Path.Combine(path.Value, name);
             var filePath = new LocalFilePath(filePathString);
             if (canWrite){
@@ -255,8 +277,8 @@ namespace Crast.Accesser.DriveAccesser{
         }
 
         //削除権限のあるファイルを全て削除する。空フォルダ含めフォルダは削除しない。
-        public override void ClearDirectory<DirectoryT>(DirectoryT path, bool recursive = false){
-            ValidateAccess(path, FileSystemAccessLevel.ReadDelete, FileSystemAccessLevel.All); // フォルダ自体を見れる必要はある
+        public override void ClearDirectory<DirectoryT>(DirectoryT path, FileSystemType fileType = FileSystemType.All, bool recursive = false){
+            ValidateAccess(path, FileSystemAccessLevel.DeleteOnly, FileSystemAccessLevel.All); 
 
             var di = new DirectoryInfo(path.Value);
             if (!di.Exists) return;
@@ -267,7 +289,7 @@ namespace Crast.Accesser.DriveAccesser{
 
             foreach (var file in files){
                 var info = DriveItemInfo.From(file);
-                if (Permission!.IsItemAllowed(info)) file.Delete();
+                if (info.FileType.InFlag(fileType) && Permission!.IsItemAllowed(info)) file.Delete();
             }
         }
 
