@@ -22,7 +22,7 @@ namespace Crast.Accesser.DriveAccesser{
         public static implicit operator LocalFilePath(string path) => new(path);
         public LocalFilePath(string path) : base(path) { }
         public override bool Exists(bool force = false) => File.Exists(Value);
-        public FileSystemType Extension => Path.GetExtension(Value).FromExtension();
+        public FileSystemType FileType => Path.GetExtension(Value).FromExtension();
     }
     public sealed record LocalDirectoryPath : LocalDrivePath, IDirectoryPath{
         public static implicit operator LocalDirectoryPath(string path) => new(path);
@@ -37,9 +37,20 @@ namespace Crast.Accesser.DriveAccesser{
         public LocalDriveAccesser(FileSystemPermissionBundle permission, bool allowEmpty = false, bool singleOnly = true)
             : base(permission, allowEmpty, singleOnly)
         { }
+        protected override void ValidateAccess(LocalDrivePath path, FileSystemAccessLevel requiredIfExist, FileSystemAccessLevel requiredIfNotExist){
+            // 1. 基底クラスの権限＆パススコープ＆存在チェック
+            base.ValidateAccess(path, requiredIfExist, requiredIfNotExist);
+
+            // 2. LocalDrive特有の拡張子チェック
+            if (path is LocalFilePath filePath){
+                if (!Permission!.IncludeFileSystemType(filePath.FileType)){
+                    throw new UnauthorizedAccessException($"このアクセッサーでは {filePath.FileType} タイプの操作は許可されていません。");
+                }
+            }
+        }
 
         public override DriveItemInfo GetItemInfo(LocalDrivePath path){
-            ValidateAccess(path, FileSystemAccessLevel.All, FileSystemAccessLevel.None);//メタデータ読み込みは無権限でも可能
+            ValidateAccess(path, FileSystemAccessLevel.InfoOnly, FileSystemAccessLevel.None);
             if (path is LocalFilePath){
                 var f = new FileInfo(path.Value);
                 return new DriveItemInfo(

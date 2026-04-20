@@ -16,24 +16,25 @@ namespace Crast.Accesser.DriveAccesser{
     [Flags]
     public enum FileSystemAccessLevel{
         None = 0,
-        ReadOnly = 1 << 0,
-        AppendOnly = 1 << 1,
-        CreateOnly = 1 << 2,
-        DeleteOnly = 1 << 3,
-        WriteOnly = 1 << 4,
-        All = (1 << 5) - 1,
+        InfoOnly = 1 << 0,//情報のみ。存在確認や、ファイルサイズの確認など。これがないと、アクセス権限があるのに存在しないと判断されることがある。
+        ReadOnly = (1 << 1) | InfoOnly,
+        AppendOnly = (1 << 2) | InfoOnly,
+        CreateOnly = (1 << 3) | InfoOnly,
+        DeleteOnly = (1 << 4) | InfoOnly,
+        WriteOnly = (1 << 5) | InfoOnly,
+        All = (1 << 6) - 1,
         AppendCreate = AppendOnly | CreateOnly,
         WriteCreate = WriteOnly | CreateOnly,
         Writable = WriteOnly | AppendOnly,
         WritableCreate = WriteOnly | AppendOnly | CreateOnly,
-        ReadDelete = ReadOnly | DeleteOnly,//チェックしてから削除
+        ReadDelete = ReadOnly | DeleteOnly,//中身を確認してから削除。カット&ペーストのときなど。
         ReadWrite = WriteOnly | ReadOnly,
         ReadWriteCreate = WriteOnly | ReadOnly | CreateOnly,
         ReadWritable = WriteOnly | AppendOnly | ReadOnly,
-        NotDelete = All - DeleteOnly,
-        NotCreate = All - CreateOnly,
-        NotAppend = All - AppendOnly,//絶対に肥大化しない
-        NotRead = All - ReadOnly,//ログ等、流出してはならないフォルダだとありえる
+        NotDelete = (All & ~DeleteOnly) | InfoOnly,
+        NotCreate = (All & ~CreateOnly) | InfoOnly,
+        NotAppend = (All & ~AppendOnly) | InfoOnly,//絶対に肥大化しない
+        NotRead = (All & ~ReadOnly) | InfoOnly,//流出してはならないフォルダだとありえる
     }
 
     //階層範囲

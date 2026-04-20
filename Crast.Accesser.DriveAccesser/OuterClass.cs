@@ -332,16 +332,16 @@ namespace Crast.Accesser.DriveAccesser{
             );
             await accesser.AppendTextAsync(path, text, withBreak);
         }
-        public IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null)
+        public async IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null)
             where FileT : DriveItemPath, IFilePath
         {
-            var accesser = GetTemporaryAccesser(
+            using var accesser = GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemTypeManager.Text,
                 requiredIfExist: FileSystemAccessLevel.ReadOnly,
                 requiredIfNotExist: FileSystemAccessLevel.None
             );
-            return accesser.ReadLinesAsync(path,encoding);
+            await foreach (var line in accesser.ReadLinesAsync(path, encoding)) yield return line;
         }
         public async Task TransferToAsync<FileT1,FileT2>(FileT1 readPath, IDriveAccesser target, FileT2 targetPath)
             where FileT1 : DriveItemPath, IFilePath where FileT2 : DriveItemPath, IFilePath
