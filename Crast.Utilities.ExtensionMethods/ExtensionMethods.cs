@@ -1,5 +1,4 @@
-﻿namespace Crast.Utilities.ExtensionMethods
-{
+﻿namespace Crast.Utilities.ExtensionMethods{
     public static class ExtensionMethods{
         /// <summary>
         /// HasFlag()の逆。

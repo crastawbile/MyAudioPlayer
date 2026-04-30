@@ -7,5 +7,7 @@ namespace Crast.Accesser.DriveAccesser{
         //文字コードのデフォルト設定
         // Python等との互換性を考慮し、BOMなしUTF-8をデフォルトにする
         public static readonly Encoding Encoding = new UTF8Encoding(false);
+        //キャッシュ利用のデフォルト設定
+        public static readonly CacheStrategy CacheStrategy = CacheStrategy.CACHE_FIRST(TimeSpan.FromMinutes(60));
     }
 }

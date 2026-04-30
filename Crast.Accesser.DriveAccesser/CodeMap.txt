@@ -93,11 +93,13 @@ GoogleItemPath.Parent及びGoogleItemPath.existsに使用
 プロパティ：
 DriveTypeEnum DriveType //LocalDrive、GoogleDriveなどのドライブ種を表すenum
 DriveItemPath Path
-PermissionScope Scope　//自身、子ファイル、孫以降ファイルの3種のFlagEnum
+PermissionScope FileAccessScope　//自身、子ファイル、孫以降ファイルの3種のFlagEnum
+PermissionScope InformationScope　//自身、子ファイル、孫以降ファイルの3種のFlagEnum
 FileSystemAccessLevel AccessLevel //Read、Append、Create、Delete、Writeの5種のFlagEnum。メタデータ読み取りは無権限で可能とする。
 FileSystemType FileType //拡張子やMIMEタイプなどに対応するenum
 機能：
 指定のDriveItemPathをアクセス範囲に含むかどうかの確認
+指定のDriveItemPathを情報表示範囲に含むかどうかの確認
 指定のFileSystemPermissionに自身が含まれるかどうかの確認
 利用箇所：
 FileSystemPermissionBundle._rootに記述される個別権限の型
@@ -153,7 +155,78 @@ FileSystemPermission.IncludeItemPathはPermissionScopeReachHistoryを利用し�
 
 ex3,指摘された改善点
 
+下部構造を持つファイルタイプをFileSystemTypeに追加するべきかどうか。
+仮想構造部分については無視した方が挙動の共通化としては良さげ。
 
+1. コンテナ型ファイルの主な分類
+FileSystemType に追加すべき、あるいはグループ化の対象となる主な種別は以下の通りです。
+
+A. アーカイブ系（圧縮・非圧縮）
+最も一般的な「中身が見える」ファイルです。
+汎用: Zip, 7z, Rar, Tar, Gz
+ディスクイメージ: Iso, Img, Vhd, Vhdx
+パッケージ: Apk (Android), Ipa (iOS), Appx (Windows)
+
+B. ドキュメント・バンドル系
+実態はZIPですが、ユーザーには一つのファイルに見えるものです。
+Office系: Docx, Xlsx, Pptx
+電子書籍: Epub
+アセット: UnityWebBundle, Pck (Godot), AssetBundle
+
+C. データベース・構造化データ系
+ファイルシステムとして見せるにはマウント処理が必要なタイプです。
+DB: Sqlite, Hdf5
+音源: Sf2 (SoundFont), Sfz
+
+仮想構造部分に侵入しないようにするためには、LocalDrivePathのコンストラクタで仮想構造を表すパスを検出する必要がある。
+
+1. 物理パスの「終端境界（Boundary）」ルール物理的なファイルシステムにおいて、パスが「仮想構造」に踏み込んでいるかどうかを判定する基本原則は以下の通りです。
+「中間ファイル」の禁止:
+パスの途中のセグメント（ディレクトリ区切りで分けた要素）の中に、「ファイルとして定義された拡張子」を持つものが含まれており、
+かつその後に続きがある場合、それは仮想パスです。
+C:/Data/Project/ → OK（全てディレクトリの可能性がある）
+C:/Data/Project/Archive.zip → OK（最後がファイルなのは物理パスとして正常）
+C:/Data/Project/Archive.zip/Inner/File.txt → NG（.zip というファイル属性の後に続きがある）
+
+2. 検出アルゴリズム：
+拡張子ベースの静的解析コンストラクタで「ディスクI/O」を行わずに判定する場合、FileSystemTypeManager が持っている拡張子リストを利用した解析が現実的です。
+パス文字列をセグメント（Path.GetFileName の繰り返し、あるいは Split）に分解する。
+最後以外のセグメントの中に、FileSystemTypeManager で「ファイル（非Directory）」として登録されている拡張子（.zip, .7z, .docx 等）を持つものがないかチェックする。
+存在すれば、それは LocalDrivePath ではなく VfsPath の管轄であるとして例外を投げる。
+
+3. パスの名前ルールと区切り文字（デリミタ）の慣習
+一般的に、仮想構造を扱うシステムでは「どこまでが物理か」を明示するために特殊な命名規則や区切り文字を採用することが多いです。
+これらを「弾く対象」として定義しておくのも手です。
+パターン例意味感嘆符 (Bang) 区切りC:/a.zip!/inner/fileJavaや一部のVFSで使われる「ここから仮想」の合図。
+ダブルスラッシュC:/a.zip//inner/fileUNIX系ツールで見られる、マウントポイントの明示。
+拡張子直後の継続C:/a.zip/inner/file最も厄介なパターン。 静的解析が必要。
+
+4. 実装における課題：
+フォルダ名に「.zip」がある場合OSのルール上、「Test.zip」という名前のフォルダを作ることは可能です。
+静的な文字列解析だけでこれを弾いてしまうと、有効な物理ディレクトリにアクセスできなくなるという副作用があります。
+これを回避するための「責任の取り方」の選択肢は2つです。
+A. 保守的（静的）アプローチ:
+「当ライブラリにおいて、コンテナ系拡張子を含む名前のフォルダは物理パスとして認めない（仮想パスとみなす）」と仕様で割り切る。
+B. 厳格（動的）アプローチ:
+コンストラクタでは基本構造（不正文字など）のみチェックし、
+実際に Accesser が利用される際の Exists 確認時、または DiscoveryAuthority の検証時に
+「実は途中でファイルだった」ことが判明した時点でエラーを出す。
+
+まとめ：
+LocalDrivePath コンストラクタでの判定ロジック案ライブラリの安定性を優先するなら、
+以下のようなチェックを LocalDrivePath のコンストラクタに入れるのが良いでしょう。
+
+C#// 簡易イメージ
+var segments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+for (int i = 0; i < segments.Length - 1; i++) // 最後の要素（ファイル名そのもの）は除外
+{
+    var ext = Path.GetExtension(segments[i]);
+    if (!string.IsNullOrEmpty(ext) && FileSystemTypeManager.IsContainerExtension(ext))
+    {
+        throw new ArgumentException("物理パスの途中にコンテナ拡張子が含まれています。仮想パスの可能性があります。");
+    }
+}
+[!IMPORTANT]「ドットで始まる隠しフォルダ（.git 等）」 は拡張子ではないので、Path.GetExtension の結果が空でないこと、かつファイル名自体がドットのみでないこと、といった細かいケアが必要になります。
 
 
 

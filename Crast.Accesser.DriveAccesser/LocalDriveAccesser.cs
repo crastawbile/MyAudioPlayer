@@ -5,7 +5,7 @@ using Crast.Utilities.ExtensionMethods;
 
 namespace Crast.Accesser.DriveAccesser{
 
-    public abstract record LocalDrivePath : DriveItemPath{
+    public abstract record LocalDrivePath : PathBaseDrivePath{
         public override string Value { get; init; }
         public override DriveTypeEnum DriveType => DriveTypeEnum.LocalDrive;
         public LocalDrivePath(string path){
@@ -15,19 +15,75 @@ namespace Crast.Accesser.DriveAccesser{
         }
         public string Name => Path.GetFileName(Value);
         public string NameOnly => Path.GetFileNameWithoutExtension(Value);
-        public override LocalDirectoryPath? Parent => ParentPath() == null ? null : (LocalDirectoryPath?)ParentPath()!;
+        
+        /// <summary>
+        /// 拡張メソッドのParents()と違って、LocalDriveであることが確定しているため非同期でない。
+        /// </summary>
+        /// <returns></returns>
+        public LocalDirectoryPath[] Parents() => ParentPath() == null ? [] : [(LocalDirectoryPath)ParentPath()!];
         private string? ParentPath() => Path.GetDirectoryName(Value);
+        /// <summary>
+        /// 拡張メソッドのGetDepthと違って、LocalDriveであることが確定しているため非同期でない。
+        /// </summary>
+        /// <remarks>
+        /// 一応、ファイルかフォルダか分からない状態で静的解析にかかる場合のための繋ぎ。
+        /// </remarks>
+        /// <param name="path"></param>
+        /// <returns></returns>
+        public int? GetDepth(LocalDrivePath path) {
+            if (this is LocalFilePath f) return f.GetDepth(path);
+            else if (this is LocalDirectoryPath d) return d.GetDepth(path);
+            else throw new ArgumentException($"未定義のpath型{path}");
+        }
     }
     public sealed record LocalFilePath : LocalDrivePath, IFilePath{
         public static implicit operator LocalFilePath(string path) => new(path);
         public LocalFilePath(string path) : base(path) { }
-        public override bool Exists(bool force = false) => File.Exists(Value);
+        /// <summary>
+        /// 拡張メソッドのExists()と違って、LocalDriveであることが確定しているため非同期でない。
+        /// </summary>
+        /// <remarks>
+        /// 一応、引数の型を揃えるためにforceはあるが使わない。
+        /// </remarks>
+        /// <returns></returns>
+        public bool Exists(bool force = false) => File.Exists(Value);
+        /// <summary>
+        /// 拡張メソッドのGetDepthと違って、LocalDriveであることが確定しているため非同期でない。
+        /// </summary>
+        /// <remarks>
+        /// ファイルの下に構造は無い前提なので、自身なら0、それ以外はnullを返す。
+        /// </remarks>
+        /// <param name="path"></param>
+        /// <returns></returns>
+        public new int? GetDepth(LocalDrivePath path) => path == this ? 0 : null;
         public FileSystemType FileType => Path.GetExtension(Value).FromExtension();
     }
     public sealed record LocalDirectoryPath : LocalDrivePath, IDirectoryPath{
         public static implicit operator LocalDirectoryPath(string path) => new(path);
         public LocalDirectoryPath(string path) : base(path) { }
-        public override bool Exists(bool force = false) => Directory.Exists(Value);
+        /// <summary>
+        /// 拡張メソッドのExists()と違って、LocalDriveであることが確定しているため非同期でない。
+        /// </summary>
+        /// <remarks>
+        /// 一応、引数の型を揃えるためにforceはあるが使わない。
+        /// </remarks>
+        /// <returns></returns>
+        public bool Exists(bool force = false) => Directory.Exists(Value);
+        /// <summary>
+        /// 拡張メソッドのGetDepthと違って、LocalDriveであることが確定しているため非同期でない。
+        /// </summary>
+        /// <param name="path"></param>
+        /// <returns></returns>
+        public new int? GetDepth(LocalDrivePath path) {
+            var count = 0;
+            LocalDrivePath? current = path;
+            while (current != null) {
+                if (current == this) return count;
+                current = current.Parents()[0];
+                count++;
+            }
+            return null;            
+        }
     }
 
 
@@ -36,22 +92,31 @@ namespace Crast.Accesser.DriveAccesser{
 
         public LocalDriveAccesser(FileSystemPermissionBundle permission, bool allowEmpty = false, bool singleOnly = true)
             : base(permission, allowEmpty, singleOnly)
-        { }
+        {
+            if(Permission?.Path is LocalDrivePath ldp) BasePath = ldp;
+        }
+        protected new LocalDrivePath? BasePath = null;
         protected override void ValidateAccess(LocalDrivePath path, FileSystemAccessLevel requiredIfExist, FileSystemAccessLevel requiredIfNotExist){
             // 1. 基底クラスの権限＆パススコープ＆存在チェック
             base.ValidateAccess(path, requiredIfExist, requiredIfNotExist);
 
             // 2. LocalDrive特有の拡張子チェック
             if (path is LocalFilePath filePath){
-                if (!Permission!.IncludeFileSystemType(filePath.FileType)){
+                if (!Permission!.Contains(filePath.FileType)){
                     throw new UnauthorizedAccessException($"このアクセッサーでは {filePath.FileType} タイプの操作は許可されていません。");
                 }
             }
         }
 
-        public override DriveItemInfo GetItemInfo(LocalDrivePath path){
-            ValidateAccess(path, FileSystemAccessLevel.InfoOnly, FileSystemAccessLevel.None);
-            if (path is LocalFilePath){
+        public override DriveItemInfo GetItemInfo(LocalDrivePath path, AccesserOption option = default){
+            if (path is LocalFilePath f) return GetFileInfo(f);
+            else if (path is LocalDirectoryPath d) return GetDirectoryInfo(d);
+            else throw new ArgumentException($"未定義のパス型{path}");
+        }
+        private DriveItemInfo GetFileInfo(LocalFilePath path) {
+            CheckEmpty();
+            if (!File.Exists(path.Value)) throw new FileNotFoundException($"存在しないファイルパスに対する操作{path}");
+            if (BasePath?.GetDepth(path) is int depth && Permission!.InformationScope.Include(depth)){
                 var f = new FileInfo(path.Value);
                 return new DriveItemInfo(
                         DriveType: DriveTypeEnum.LocalDrive,
@@ -62,26 +127,38 @@ namespace Crast.Accesser.DriveAccesser{
                         LastModified: f.LastWriteTime,
                         IsDirectory: false
                     );
-            }else{
-                var f = new DirectoryInfo(path.Value);
+            } else {
+                throw new UnauthorizedAccessException("ファイルへのアクセス権限が不足しています。");
+            }
+        }
+        private DriveItemInfo GetDirectoryInfo(LocalDirectoryPath path){
+            CheckEmpty();
+            if (!Directory.Exists(path.Value)) throw new FileNotFoundException($"存在しないフォルダパスに対する操作{path}");
+            if (BasePath?.GetDepth(path) is int depth && Permission!.InformationScope.Include(depth)){
+                var d = new DirectoryInfo(path.Value);
                 return new DriveItemInfo(
                         DriveType: DriveTypeEnum.LocalDrive,
-                        Name: f.Name,
+                        Name: d.Name,
                         FileType: FileSystemType.Directory,
                         Path: path,
                         Size: null,
-                        LastModified: f.LastWriteTime,
+                        LastModified: d.LastWriteTime,
                         IsDirectory: true
                     );
+            } else {
+                throw new UnauthorizedAccessException("フォルダへのアクセス権限が不足しています。");
             }
-
         }
-        public override async Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(
-            DirectoryT path,
+        public new DriveItemInfo[] GetFileListAsync(
+            LocalDirectoryPath path,
             FileSystemType fileType = FileSystemType.All,
-            bool recursive = false
-            ){
+            PermissionScope? scope = null,
+            AccesserOption option = default
+            )
+        {
             CheckEmpty();
+            var infoScope = scope != null ? scope.Value : PermissionScope.ChildrenOnly;
+            DriveItemInfo[] list = [];
 
             //指定したfolderの子に対するアクセス権限があるかどうかをまず確認
             if (Permission!.IncludeScope(PermissionScope.ChildrenOnly) && Permission.Path == path) { }
@@ -94,7 +171,7 @@ namespace Crast.Accesser.DriveAccesser{
             return di.GetFiles("*", option)
                 .Where(f => 
                     f.Extension.FromExtension().InFlag(fileType)
-                    && Permission.IncludeFileSystemType(f.Extension.FromExtension())
+                    && Permission.Contains(f.Extension.FromExtension())
                 ) // 拡張子フィルタ適用
                 .Select(f => new DriveItemInfo(
                     Name: f.Name,

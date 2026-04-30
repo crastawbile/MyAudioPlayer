@@ -2,14 +2,17 @@
 
 namespace Crast.Accesser.DriveAccesser{
 
-    public abstract record GoogleDrivePath : DriveItemPath{
+    public abstract record GoogleDrivePath : IdBaseDrivePath{
         public override string Value { get; init; }
         public override DriveTypeEnum DriveType => DriveTypeEnum.GoogleDrive;
         public GoogleDrivePath(string id){
             CheckId(id);
             Value = id;
         }
-        public override GoogleDirectoryPath? Parent => this.InBank() ? this.FromBank()?.ParentId : null;
+        public override GoogleDirectoryPath[] Parents(CacheStrategy? strategy = null) {
+
+            return this.InBank() ? this.FromBank()?.ParentId : null;
+        }
         public GoogleDirectoryPath? GetParent(bool force) => this.InBank() ? this.FromBank(force)?.ParentId : null;
         public string? GetName(bool force) => this.InBank() ? this.FromBank(force)?.Name : null;
         protected static bool CheckId(string id){

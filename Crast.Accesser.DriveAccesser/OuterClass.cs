@@ -54,8 +54,10 @@ namespace Crast.Accesser.DriveAccesser{
             await GetSolidAccesser(accesserName).ClearDirectory(path, fileType, recursive);
         }
 
-        public async Task<DriveItemInfo> GetItemInfo(string accesserName, DriveItemPath path)
-        {
+        public async Task<bool> ItemExists(string accesserName, DriveItemPath path){
+            return await GetSolidAccesser(accesserName).ItemExists(path);
+        }
+        public async Task<DriveItemInfo> GetItemInfo(string accesserName, DriveItemPath path){
             return await GetSolidAccesser(accesserName).GetItemInfo(path);
         }
         public async Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(
@@ -216,6 +218,15 @@ namespace Crast.Accesser.DriveAccesser{
             await accesser.ClearDirectory(path, fileType, recursive);
         }
 
+        public async Task<bool> ItemExists(DriveItemPath path){
+            using var accesser = GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                requiredIfExist: FileSystemAccessLevel.ReadOnly,
+                requiredIfNotExist: FileSystemAccessLevel.None
+            );
+            return await accesser.ItemExists(path);
+        }
         public async Task<DriveItemInfo> GetItemInfo(DriveItemPath path){
             using var accesser = GetTemporaryAccesser(
                 path: path,
