@@ -6,7 +6,7 @@ namespace Crast.Accesser.DriveAccesser{
 
 
     /// <summary>
-    /// FolderPermissionを利用したaccesser呼び出しを行うクラスの基底クラス
+    /// 既定のAccesser呼び出しを行うクラス
     /// </summary>
     /// <remarks>
     /// フォルダ名すら隠蔽する前提。
@@ -27,102 +27,122 @@ namespace Crast.Accesser.DriveAccesser{
             if (!_Accessers.TryGetValue(name, out var accesser)) throw new ArgumentException($"存在しないaccesserの呼び出し{name}");
             return accesser;
         }
-        public async Task<IFilePath> CreateEmptyFile<FileT>(string accesserName, FileT path, FileSystemType fileType, string fileName, bool canWrite = false)
-            where FileT : DriveItemPath, IDirectoryPath
-        {
-            return await GetSolidAccesser(accesserName).CreateEmptyFile(path, fileName,fileType, canWrite);
-        }
-        public async Task DeleteFile<FileT>(string accesserName, FileT path)
-            where FileT : DriveItemPath, IFilePath
-        {
-            await GetSolidAccesser(accesserName).DeleteFile(path);
-        }
 
-        public async Task<IDirectoryPath> CreateDirectory<DirectoryT>(string accesserName, DirectoryT path, string name)
-            where DirectoryT : DriveItemPath, IDirectoryPath
-        {
-            return await GetSolidAccesser(accesserName).CreateDirectory(path, name);
+        #region メタデータ取得
+        public async ValueTask<bool> ItemExistsAsync(string accesserName, DriveItemPath path, AccesserOption option = default){
+            return await GetSolidAccesser(accesserName).ItemExistsAsync(path,option);
         }
-        public async Task DeleteDirectory<DirectoryT>(string accesserName, DirectoryT path, PermissionScope scope = PermissionScope.SelfOnly)
-            where DirectoryT : DriveItemPath, IDirectoryPath
-        {
-            await GetSolidAccesser(accesserName).DeleteDirectory(path, scope);
+        public async ValueTask<DriveItemInfo> GetItemInfoAsync(string accesserName, DriveItemPath path, AccesserOption option = default){
+            return await GetSolidAccesser(accesserName).GetItemInfoAsync(path,option);
         }
-        public async Task ClearDirectory<DirectoryT>(string accesserName, DirectoryT path, FileSystemType fileType = FileSystemType.All, bool recursive = false)
-            where DirectoryT : DriveItemPath, IDirectoryPath
-        {
-            await GetSolidAccesser(accesserName).ClearDirectory(path, fileType, recursive);
-        }
-
-        public async Task<bool> ItemExists(string accesserName, DriveItemPath path){
-            return await GetSolidAccesser(accesserName).ItemExists(path);
-        }
-        public async Task<DriveItemInfo> GetItemInfo(string accesserName, DriveItemPath path){
-            return await GetSolidAccesser(accesserName).GetItemInfo(path);
-        }
-        public async Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(
+        public async IAsyncEnumerable<DriveItemInfo> GetFileListAsync<DirectoryT>(
             string accesserName,
-            DirectoryT path,
+            IDirectoryPath path,
             FileSystemType fileType = FileSystemType.All,
-            bool recursive = false
+            PermissionScope? scope = null,
+            AccesserOption option = default
         )
             where DirectoryT : DriveItemPath, IDirectoryPath
         {
-            return await GetSolidAccesser(accesserName).GetFileListAsync(path, fileType, recursive);
+            await foreach (var info in GetSolidAccesser(accesserName).GetFileListAsync(path, fileType, scope, option)) yield return info;
+        }
+        #endregion
+
+        #region ファイル・フォルダの作成と削除
+        public async Task<IFilePath> CreateEmptyFileAsync<FileT>(
+            string accesserName,
+            FileT path,
+            FileSystemType fileType,
+            string fileName,
+            bool canWrite = false,
+            AccesserOption option = default
+            )
+            where FileT : DriveItemPath, IDirectoryPath
+        {
+            return await GetSolidAccesser(accesserName).CreateEmptyFileAsync(path, fileName, fileType, canWrite,option);
+        }
+        public async Task DeleteFileAsync<FileT>(string accesserName, FileT path, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
+        {
+            await GetSolidAccesser(accesserName).DeleteFileAsync(path,option);
+        }
+        public async Task<IDirectoryPath> CreateDirectoryAsync<DirectoryT>(string accesserName, IDirectoryPath path, string name, bool canWrite = false, AccesserOption option = default)
+            where DirectoryT : DriveItemPath, IDirectoryPath
+        {
+            return await GetSolidAccesser(accesserName).CreateDirectoryAsync(path, name, canWrite, option);
+        }
+        public async Task DeleteDirectoryAsync<DirectoryT>(string accesserName, IDirectoryPath path, PermissionScope? scope = null, AccesserOption option = default)
+            where DirectoryT : DriveItemPath, IDirectoryPath
+        {
+            await GetSolidAccesser(accesserName).DeleteDirectoryAsync(path, scope, option);
+        }
+        public async Task ClearDirectoryAsync<DirectoryT>(
+            string accesserName,
+            IDirectoryPath path,
+            FileSystemType fileType = FileSystemType.All,
+            PermissionScope? scope = null,
+            AccesserOption option = default
+            )
+            where DirectoryT : DriveItemPath, IDirectoryPath
+        {
+            await GetSolidAccesser(accesserName).ClearDirectoryAsync(path, fileType, scope, option);
+        }
+        #endregion
+
+        #region ファイルの読み取りと書き込み
+        public async Task SaveObjectAsync<FileT>(string accesserName, FileT path, object data, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
+        {
+            await GetSolidAccesser(accesserName).SaveObjectAsync(path, data, option);
+        }
+        public async Task<dataT?> LoadObjectAsync<dataT, FileT>(string accesserName, FileT path, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
+        {
+            return await GetSolidAccesser(accesserName).LoadObjectAsync<dataT, FileT>(path, option);
+        }
+        public async Task SaveRawAsync<FileT>(string accesserName, FileT path, ReadOnlyMemory<byte> data, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
+        {
+            await GetSolidAccesser(accesserName).SaveRawAsync(path, data, option);
+        }
+        public async Task AppendRawAsync<FileT>(string accesserName, FileT path, ReadOnlyMemory<byte> data, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
+        {
+            await GetSolidAccesser(accesserName).AppendRawAsync(path, data, option);
         }
 
-        public async Task SaveObjectAsync<FileT>(string accesserName, FileT path, object data)
+        public async Task<byte[]> LoadRawAsync<FileT>(string accesserName, FileT path, AccesserOption option = default)
             where FileT : DriveItemPath, IFilePath
         {
-            await GetSolidAccesser(accesserName).SaveObjectAsync(path, data);
+            return await GetSolidAccesser(accesserName).LoadRawAsync(path, option);
         }
-        public async Task<dataT?> LoadObjectAsync<dataT, FileT>(string accesserName, FileT path)
+        public async Task SaveTextAsync<FileT>(string accesserName, FileT path, string text, Encoding? encoding = null, AccesserOption option = default)
             where FileT : DriveItemPath, IFilePath
         {
-            return await GetSolidAccesser(accesserName).LoadObjectAsync<dataT, FileT>(path);
+            await GetSolidAccesser(accesserName).SaveTextAsync(path, text, encoding, option);
         }
-        public async Task SaveRawAsync<FileT>(string accesserName, FileT path, ReadOnlyMemory<byte> data)
+        public async Task<string> LoadTextAsync<FileT>(string accesserName, FileT path, Encoding? encoding = null, AccesserOption option = default)
             where FileT : DriveItemPath, IFilePath
         {
-            await GetSolidAccesser(accesserName).SaveRawAsync(path, data);
-        }
-        public async Task AppendRawAsync<FileT>(string accesserName, FileT path, ReadOnlyMemory<byte> data)
-            where FileT : DriveItemPath, IFilePath
-        {
-            await GetSolidAccesser(accesserName).AppendRawAsync(path, data);
+            return await GetSolidAccesser(accesserName).LoadTextAsync(path, encoding, option);
         }
 
-        public async Task<byte[]> LoadRawAsync<FileT>(string accesserName, FileT path)
+        public async Task AppendTextAsync<FileT>(string accesserName, FileT path, string text, bool withBreak = false, AccesserOption option = default)
             where FileT : DriveItemPath, IFilePath
         {
-            return await GetSolidAccesser(accesserName).LoadRawAsync(path);
+            await GetSolidAccesser(accesserName).AppendTextAsync(path, text, withBreak, option);
         }
-        public async Task SaveTextAsync<FileT>(string accesserName, FileT path, string text, Encoding? encoding = null)
+        public IAsyncEnumerable<string> ReadLinesAsync<FileT>(string accesserName, FileT path, Encoding? encoding = null, AccesserOption option = default)
             where FileT : DriveItemPath, IFilePath
         {
-            await GetSolidAccesser(accesserName).SaveTextAsync(path, text, encoding);
+            return GetSolidAccesser(accesserName).ReadLinesAsync(path, encoding, option);
         }
-        public async Task<string> LoadTextAsync<FileT>(string accesserName, FileT path, Encoding? encoding = null)
-            where FileT : DriveItemPath, IFilePath
-        {
-            return await GetSolidAccesser(accesserName).LoadTextAsync(path, encoding);
-        }
-
-        public async Task AppendTextAsync<FileT>(string accesserName, FileT path, string text, bool withBreak = false)
-            where FileT : DriveItemPath, IFilePath
-        {
-            await GetSolidAccesser(accesserName).AppendTextAsync(path, text, withBreak);
-        }
-        public IAsyncEnumerable<string> ReadLinesAsync<FileT>(string accesserName, FileT path, Encoding? encoding = null)
-            where FileT : DriveItemPath, IFilePath
-        {
-            return GetSolidAccesser(accesserName).ReadLinesAsync(path, encoding);
-        }
-        public async Task TransferToAsync<FileT1, FileT2>(string readerName, FileT1 readPath, string targetName, FileT2 targetPath)
+        public async Task TransferToAsync<FileT1, FileT2>(string readerName, FileT1 readPath, string targetName, FileT2 targetPath, AccesserOption option = default)
             where FileT1 : DriveItemPath, IFilePath where FileT2 : DriveItemPath, IFilePath
         {
-            await GetSolidAccesser(readerName).TransferToAsync(readPath, GetSolidAccesser(targetName), targetPath);
+            await GetSolidAccesser(readerName).TransferToAsync(readPath, GetSolidAccesser(targetName), targetPath, option);
         }
+        #endregion
 
     }
     /// <summary>
@@ -138,232 +158,176 @@ namespace Crast.Accesser.DriveAccesser{
         }
 
         //個別権限の使い捨てaccesserを生成する
-        private IDriveAccesser GetTemporaryAccesser(
+        private async ValueTask<IDriveAccesser> GetTemporaryAccesser(
             DriveItemPath path,
             FileSystemType fileType,
-            FileSystemAccessLevel requiredIfExist,
-            FileSystemAccessLevel requiredIfNotExist
-        )
-        {
-            FileSystemAccessLevel level;
-            if (requiredIfNotExist == FileSystemAccessLevel.None || path.Exists(true)){
-                level = requiredIfExist;
-            }else{
-                level = requiredIfNotExist;
-            }
-            var permission = Permissions
-                .Narrow(path,fileType,level)
-                .MergeAccessLevel()
-                ;
-            if (permission.IsEmpty) throw new ArgumentException($"許可されていないアクセスです: {path}   {Permissions}");
-            var p = permission.AsSinglePermission();
-            if (p.DriveType == DriveTypeEnum.LocalDrive) { return new LocalDriveAccesser(permission); }
-            else if (p.DriveType == DriveTypeEnum.GoogleDrive) { return new GoogleDriveAccesser(permission); }
-            throw new ArgumentException($"定義されていないドライブへのアクセス要求{permission}");
+            FileSystemAccessLevel level
+        ){
+            var permission = level == FileSystemAccessLevel.CreateOnly ?
+                await Permissions.ComposeToSingleDirectoryAsync(path, fileType) :
+                await Permissions.ComposeToSinglePathAsync(path, fileType, level);
+            if (permission.IsEmpty) throw new ArgumentException($"{this}に許可されていないアクセスです: {path}");
+
+            return path.DriveType switch{
+                DriveTypeEnum.LocalDrive => new LocalDriveAccesser(permission),
+                DriveTypeEnum.GoogleDrive => new GoogleDriveAccesser(permission),
+                _ => throw new ArgumentException($"定義されていないドライブへのアクセス要求{permission}"),
+            };
         }
-        public async Task<IFilePath> CreateEmptyFile<FileT>(FileT path, string fileName, FileSystemType fileType, bool canWrite = false)
+
+        #region メタデータ関連
+        public async Task<bool> ItemExistsAsync(DriveItemPath path, AccesserOption option = default){
+            using var accesser = await GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                level: FileSystemAccessLevel.None
+            );
+            return await accesser.ItemExistsAsync(path, option);
+        }
+        public async Task<DriveItemInfo> GetItemInfoAsync(DriveItemPath path, AccesserOption option = default){
+            using var accesser = await GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                level: FileSystemAccessLevel.None
+            );
+            return await accesser.GetItemInfoAsync(path, option);
+        }
+        #endregion
+
+        #region 作成・削除
+        public async Task<IFilePath> CreateEmptyFileAsync<FileT>(FileT path, string fileName, FileSystemType fileType, bool canWrite = false, AccesserOption option = default)
         where FileT : DriveItemPath, IDirectoryPath
         {
-            using var accesser = GetTemporaryAccesser(
+            using var accesser = await GetTemporaryAccesser(
                 path: path,
                 fileType: fileType,
-                requiredIfExist: canWrite ? FileSystemAccessLevel.WriteOnly : FileSystemAccessLevel.None,
-                requiredIfNotExist: FileSystemAccessLevel.CreateOnly
+                level: FileSystemAccessLevel.CreateOnly
             );
-            return await accesser.CreateEmptyFile(path, fileName,fileType, canWrite);
+            return await accesser.CreateEmptyFileAsync(path, fileName, fileType, canWrite, option);
         }
-        public async Task DeleteFile<FileT>(FileT path, FileSystemType fileType)
+        public async Task DeleteFileAsync<FileT>(FileT path, FileSystemType fileType, AccesserOption option = default)
             where FileT : DriveItemPath, IFilePath
         {
-            using var accesser = GetTemporaryAccesser(
+            using var accesser = await GetTemporaryAccesser(
                 path: path,
                 fileType: fileType,
-                requiredIfExist: FileSystemAccessLevel.DeleteOnly,
-                requiredIfNotExist: FileSystemAccessLevel.All
+                level: FileSystemAccessLevel.DeleteOnly
             );
-            await accesser.DeleteFile(path);
+            await accesser.DeleteFileAsync(path);
         }
-
-        public async Task<IDirectoryPath> CreateDirectory<DirectoryT>(DirectoryT path, string name)
+        public async Task<IDirectoryPath> CreateDirectoryAsync<DirectoryT>(DirectoryT path, string name, bool canWrite, AccesserOption option = default)
             where DirectoryT : DriveItemPath, IDirectoryPath
         {
-            using var accesser = GetTemporaryAccesser(
+            using var accesser = await GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemType.Directory,
-                requiredIfExist: FileSystemAccessLevel.All,
-                requiredIfNotExist: FileSystemAccessLevel.CreateOnly
+                level: FileSystemAccessLevel.CreateOnly
             );
-            return await accesser.CreateDirectory(path, name);
+            return await accesser.CreateDirectoryAsync(path, name, canWrite, option);
         }
-        public async Task DeleteDirectory<DirectoryT>(DirectoryT path, PermissionScope scope = PermissionScope.SelfOnly)
-            where DirectoryT : DriveItemPath, IDirectoryPath
+        #endregion
+
+        public async Task SaveObjectAsync<FileT>(FileT path, object data, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
         {
-            using var accesser = GetTemporaryAccesser(
+            using var accesser = await GetTemporaryAccesser(
                 path: path,
-                fileType: FileSystemType.Directory,
-                requiredIfExist: FileSystemAccessLevel.ReadDelete,
-                requiredIfNotExist: FileSystemAccessLevel.All
+                fileType: FileSystemType.All,
+                level: FileSystemAccessLevel.WriteOnly
             );
-            await accesser.DeleteDirectory(path, scope);
+            await accesser.SaveObjectAsync(path, data, option);
         }
-        public async Task ClearDirectory<DirectoryT>(DirectoryT path, FileSystemType fileType = FileSystemType.All, bool recursive = false)
-            where DirectoryT : DriveItemPath, IDirectoryPath
+        public async Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
         {
-            using var accesser = GetTemporaryAccesser(
+            using var accesser = await GetTemporaryAccesser(
                 path: path,
-                fileType: FileSystemType.Directory,
-                requiredIfExist: FileSystemAccessLevel.ReadDelete,
-                requiredIfNotExist: FileSystemAccessLevel.None
+                fileType: FileSystemType.All,
+                level: FileSystemAccessLevel.ReadOnly
             );
-            await accesser.ClearDirectory(path, fileType, recursive);
+            return await accesser.LoadObjectAsync<dataT, FileT>(path, option);
+        }
+        public async Task SaveRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
+        {
+            using var accesser = await GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                level: FileSystemAccessLevel.WriteOnly
+            );
+            await accesser.SaveRawAsync(path, data, option);
+        }
+        public async Task AppendRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
+        {
+            using var accesser = await GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                level: FileSystemAccessLevel.AppendOnly
+            );
+            await accesser.AppendRawAsync(path, data, option);
         }
 
-        public async Task<bool> ItemExists(DriveItemPath path){
-            using var accesser = GetTemporaryAccesser(
-                path: path,
-                fileType: FileSystemType.All,
-                requiredIfExist: FileSystemAccessLevel.ReadOnly,
-                requiredIfNotExist: FileSystemAccessLevel.None
-            );
-            return await accesser.ItemExists(path);
-        }
-        public async Task<DriveItemInfo> GetItemInfo(DriveItemPath path){
-            using var accesser = GetTemporaryAccesser(
-                path: path,
-                fileType: FileSystemType.All,
-                requiredIfExist: FileSystemAccessLevel.ReadOnly,
-                requiredIfNotExist: FileSystemAccessLevel.None
-            );
-            return await accesser.GetItemInfo(path);
-        }
-        public async Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(
-            DirectoryT path,
-            FileSystemType fileType = FileSystemType.All,
-            FileSystemAccessLevel requiredLevel = FileSystemAccessLevel.All,
-            bool recursive = false
-        )
-            where DirectoryT : DriveItemPath, IDirectoryPath
+        public async Task<byte[]> LoadRawAsync<FileT>(FileT path, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
         {
-            using var accesser = GetTemporaryAccesser(
+            using var accesser = await GetTemporaryAccesser(
                 path: path,
-                fileType: FileSystemType.Directory,
-                requiredIfExist: requiredLevel,
-                requiredIfNotExist: FileSystemAccessLevel.None
+                fileType: FileSystemType.All,
+                level: FileSystemAccessLevel.ReadOnly
             );
-            return await accesser.GetFileListAsync(path, fileType, recursive);
+            return await accesser.LoadRawAsync(path, option);
+        }
+        public async Task SaveTextAsync<FileT>(FileT path, string text, Encoding? encoding = null, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
+        {
+            using var accesser = await GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                level: FileSystemAccessLevel.WriteOnly
+            );
+            await accesser.SaveTextAsync(path,text,encoding, option);
+        }
+        public async Task<string> LoadTextAsync<FileT>(FileT path, Encoding? encoding = null, AccesserOption option = default)
+            where FileT : DriveItemPath, IFilePath
+        {
+            using var accesser = await GetTemporaryAccesser(
+                path: path,
+                fileType: FileSystemType.All,
+                level: FileSystemAccessLevel.ReadOnly
+            );
+            return await accesser.LoadTextAsync(path, encoding, option);
         }
 
-        public async Task SaveObjectAsync<FileT>(FileT path, object data)
+        public async Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false, AccesserOption option = default)
             where FileT : DriveItemPath, IFilePath
         {
-            using var accesser = GetTemporaryAccesser(
-                path: path,
-                fileType: FileSystemType.All,
-                requiredIfExist: FileSystemAccessLevel.WriteOnly,
-                requiredIfNotExist: FileSystemAccessLevel.WriteCreate
-            );
-            await accesser.SaveObjectAsync(path, data);
-        }
-        public async Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path)
-            where FileT : DriveItemPath, IFilePath
-        {
-            using var accesser = GetTemporaryAccesser(
-                path: path,
-                fileType: FileSystemType.All,
-                requiredIfExist: FileSystemAccessLevel.ReadOnly,
-                requiredIfNotExist: FileSystemAccessLevel.None
-            );
-            return await accesser.LoadObjectAsync<dataT, FileT>(path);
-        }
-        public async Task SaveRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data)
-            where FileT : DriveItemPath, IFilePath
-        {
-            using var accesser = GetTemporaryAccesser(
-                path: path,
-                fileType: FileSystemType.All,
-                requiredIfExist: FileSystemAccessLevel.WriteOnly,
-                requiredIfNotExist: FileSystemAccessLevel.WriteCreate
-            );
-            await accesser.SaveRawAsync(path, data);
-        }
-        public async Task AppendRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data)
-            where FileT : DriveItemPath, IFilePath
-        {
-            using var accesser = GetTemporaryAccesser(
-                path: path,
-                fileType: FileSystemType.All,
-                requiredIfExist: FileSystemAccessLevel.AppendOnly,
-                requiredIfNotExist: FileSystemAccessLevel.AppendCreate
-            );
-            await accesser.AppendRawAsync(path, data);
-        }
-
-        public async Task<byte[]> LoadRawAsync<FileT>(FileT path)
-            where FileT : DriveItemPath, IFilePath
-        {
-            using var accesser = GetTemporaryAccesser(
-                path: path,
-                fileType: FileSystemType.All,
-                requiredIfExist: FileSystemAccessLevel.ReadOnly,
-                requiredIfNotExist: FileSystemAccessLevel.None
-            );
-            return await accesser.LoadRawAsync(path);
-        }
-        public async Task SaveTextAsync<FileT>(FileT path, string text, Encoding? encoding = null)
-            where FileT : DriveItemPath, IFilePath
-        {
-            using var accesser = GetTemporaryAccesser(
-                path: path,
-                fileType: FileSystemType.All,
-                requiredIfExist: FileSystemAccessLevel.WriteOnly,
-                requiredIfNotExist: FileSystemAccessLevel.WriteCreate
-            );
-            await accesser.SaveTextAsync(path,text,encoding);
-        }
-        public async Task<string> LoadTextAsync<FileT>(FileT path, Encoding? encoding = null)
-            where FileT : DriveItemPath, IFilePath
-        {
-            using var accesser = GetTemporaryAccesser(
-                path: path,
-                fileType: FileSystemType.All,
-                requiredIfExist: FileSystemAccessLevel.ReadOnly,
-                requiredIfNotExist: FileSystemAccessLevel.None
-            );
-            return await accesser.LoadTextAsync(path, encoding);
-        }
-
-        public async Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false)
-            where FileT : DriveItemPath, IFilePath
-        {
-            using var accesser = GetTemporaryAccesser(
+            using var accesser = await GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemTypeManager.Text,
-                requiredIfExist: FileSystemAccessLevel.AppendOnly,
-                requiredIfNotExist: FileSystemAccessLevel.None
+                level: FileSystemAccessLevel.AppendOnly
             );
-            await accesser.AppendTextAsync(path, text, withBreak);
+            await accesser.AppendTextAsync(path, text, withBreak, option);
         }
-        public async IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null)
+        public async IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null, AccesserOption option = default)
             where FileT : DriveItemPath, IFilePath
         {
-            using var accesser = GetTemporaryAccesser(
+            using var accesser = await GetTemporaryAccesser(
                 path: path,
                 fileType: FileSystemTypeManager.Text,
-                requiredIfExist: FileSystemAccessLevel.ReadOnly,
-                requiredIfNotExist: FileSystemAccessLevel.None
+                level: FileSystemAccessLevel.ReadOnly
             );
-            await foreach (var line in accesser.ReadLinesAsync(path, encoding)) yield return line;
+            await foreach (var line in accesser.ReadLinesAsync(path, encoding, option)) yield return line;
         }
-        public async Task TransferToAsync<FileT1,FileT2>(FileT1 readPath, IDriveAccesser target, FileT2 targetPath)
+        public async Task TransferToAsync<FileT1,FileT2>(FileT1 readPath, IDriveAccesser target, FileT2 targetPath, AccesserOption option = default)
             where FileT1 : DriveItemPath, IFilePath where FileT2 : DriveItemPath, IFilePath
         {
-            using var reader = GetTemporaryAccesser(
+            using var reader = await GetTemporaryAccesser(
                 path: readPath,
                 fileType: FileSystemType.All,
-                requiredIfExist: FileSystemAccessLevel.ReadOnly,
-                requiredIfNotExist: FileSystemAccessLevel.None
+                level: FileSystemAccessLevel.ReadOnly
             );
-            await reader.TransferToAsync(readPath, target, targetPath);
+            await reader.TransferToAsync(readPath, target, targetPath, option);
         }
     }
 

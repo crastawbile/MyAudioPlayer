@@ -170,10 +170,6 @@ namespace Crast.Accesser.DriveAccesser{
         public static string? ToExtension(this FileSystemType type){
             return _ToExtension[type];
         }
-        public static FileSystemType FromMimeType(this GoogleDriveMetadata metadata){
-            if (_FromMimeType.TryGetValue(metadata.MimeType!, out var type)) return type;
-            throw new ArgumentException($"定義されていないMIMEタイプ{metadata.MimeType}");
-        }
         public static FileSystemType FromMimeType(this string mimeType){
             if (_FromMimeType.TryGetValue(mimeType, out var type)) return type;
             throw new ArgumentException($"定義されていないMIMEタイプ{mimeType}");
@@ -434,12 +430,12 @@ namespace Crast.Accesser.DriveAccesser{
 
         public static DriveItemPath[] GetCachedNodeParentIds(this DriveItemPath id) => id.TryGetParentIds(out var parentIds) ? parentIds : [];
         public static DriveItemPath[] GetCachedNodeChildIds(this DriveItemPath parentId) => parentId.TryGetChildIds(out var childIds) ? childIds : [];
-        public static CachedResult? GetCachedNode(this DriveItemPath id) => 
+        public static CachedResult? GetCachedResult(this DriveItemPath id) => 
             CachedResults.TryGetValue(id.DriveType, out var dict) && dict.TryGetValue(id, out var result) ? result : null;
-        public static CachedResult?[] GetParentCachedNode(this DriveItemPath id) =>
-            id.TryGetParentIds(out var parentIds) ? parentIds.Select(pid => pid.GetCachedNode()).ToArray() : [];
-        public static CachedResult?[] GetChildCachedNode(this DriveItemPath parentId) => 
-            parentId.TryGetChildIds(out var childIds) ? childIds.Select(cid => cid.GetCachedNode()).ToArray() : [];
+        public static CachedResult?[] GetParentCachedResult(this DriveItemPath id) =>
+            id.TryGetParentIds(out var parentIds) ? parentIds.Select(pid => pid.GetCachedResult()).ToArray() : [];
+        public static CachedResult?[] GetChildCachedResult(this DriveItemPath parentId) => 
+            parentId.TryGetChildIds(out var childIds) ? childIds.Select(cid => cid.GetCachedResult()).ToArray() : [];
 
         private static TraficDriveManager InnerAccesser { get; }= new TraficDriveManager(FileSystemPermissionBundle.Master);
         public static bool InCache(this DriveItemPath id) => CachedResults.TryGetValue(id.DriveType, out var dict) && dict.ContainsKey(id);
@@ -453,17 +449,19 @@ namespace Crast.Accesser.DriveAccesser{
         /// <param name="strategy"></param>
         /// <returns></returns>
         /// <exception cref="ArgumentException"></exception>
-        public static async Task<DriveItemPath[]> Parents(this DriveItemPath path, CacheStrategy? strategy = null) {
+        public static async ValueTask<DriveItemPath[]> Parents(this DriveItemPath path, CacheStrategy? strategy = null) {
             CacheStrategy cs;
             if (strategy == null) cs = CacheStrategy.CACHE_FIRST(TimeSpan.FromMinutes(60));
             else cs = strategy.Value;
 
-            if (path is PathBaseDrivePath pathBaseDrivepath){
-                return Path.GetDirectoryName(pathBaseDrivepath.Value) is string parentPath ? [(LocalDirectoryPath)parentPath!] : [];
+            if (path is PathBaseDrivePath pathBaseDrivePath){
+                return Path.GetDirectoryName(pathBaseDrivePath.Value) is string parentPath ? [(LocalDirectoryPath)parentPath!] : [];
             } else if (path is IdBaseDrivePath idBaseDrivepath){
+                if (GetCachedResult(idBaseDrivepath) is CachedResult result && result.Node?.ParentIds is DriveItemPath[] ids) return ids;
+
                 if (idBaseDrivepath is GoogleDrivePath googleDrivePath) {
-                    var info = await InnerAccesser.GetItemInfo(googleDrivePath, cs);
-                    return info.cache?.Parents ?? [];
+                    var info = await InnerAccesser.GetItemInfoAsync(googleDrivePath, cs);
+                    return info.Cache?.ParentIds ?? [];
                 }else{
                     throw new ArgumentException($"定義されていないIdBaseDrivePathのサブクラス{idBaseDrivepath.GetType()}");
                 }
@@ -471,7 +469,7 @@ namespace Crast.Accesser.DriveAccesser{
                 throw new ArgumentException($"定義されていないDriveItemPathのサブクラス{path.GetType()}");
             }
         }
-        public static async Task<bool> Exists(this DriveItemPath path, CacheStrategy? strategy = null) {
+        public static async ValueTask<bool> Exists(this DriveItemPath path, CacheStrategy? strategy = null) {
             CacheStrategy cs;
             if (strategy == null) cs = CacheStrategy.CACHE_FIRST(TimeSpan.FromMinutes(60));
             else cs = strategy.Value;
@@ -480,11 +478,31 @@ namespace Crast.Accesser.DriveAccesser{
                 return File.Exists(pathBaseDrivepath.Value);
             } else if (path is IdBaseDrivePath idBaseDrivepath){
                 if (idBaseDrivepath is GoogleDrivePath googleDrivePath) {
-                    return await InnerAccesser.ItemExists(googleDrivePath, cs);
+                    return await InnerAccesser.ItemExistsAsync(googleDrivePath, cs);
                 }else{
                     throw new ArgumentException($"定義されていないIdBaseDrivePathのサブクラス{idBaseDrivepath.GetType()}");
                 }
             } else {
+                throw new ArgumentException($"定義されていないDriveItemPathのサブクラス{path.GetType()}");
+            }
+        }
+        public static async ValueTask<string> GetName(this DriveItemPath path, CacheStrategy? strategy = null) {
+            CacheStrategy cs;
+            if (strategy == null) cs = Config.CacheStrategy;
+            else cs = strategy.Value;
+
+            if (path is PathBaseDrivePath pathBaseDrivePath){
+                return Path.GetFileName(pathBaseDrivePath.Value);
+            }else if (path is IdBaseDrivePath idBaseDrivepath){
+                if (GetCachedResult(idBaseDrivepath) is CachedResult result && result.Node?.Name is string name) return name;
+                
+                if (idBaseDrivepath is GoogleDrivePath googleDrivePath){
+                    var info = await InnerAccesser.GetItemInfoAsync(googleDrivePath, cs);
+                    return info.Name;
+                }else{
+                    throw new ArgumentException($"定義されていないIdBaseDrivePathのサブクラス{idBaseDrivepath.GetType()}");
+                }
+            }else{
                 throw new ArgumentException($"定義されていないDriveItemPathのサブクラス{path.GetType()}");
             }
         }

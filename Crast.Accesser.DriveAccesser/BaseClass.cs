@@ -1,5 +1,6 @@
 ﻿
 
+using Crast.Utilities.ExtensionMethods;
 using System.Text;
 
 /// <summary>
@@ -24,6 +25,12 @@ namespace Crast.Accesser.DriveAccesser{
     public abstract record PathBaseDrivePath : DriveItemPath { }
     public abstract record IdBaseDrivePath : DriveItemPath { }
 
+    //対象が存在しなかった場合のモード指定用enum
+    public enum IfNotExists {
+        None,//何もしない
+        Error,//エラーを返す
+        Create//生成して続ける
+    }
 
     /// <summary>
     /// Accesserの派生先で必要な追加引数をまとめて受け入れるための型。
@@ -78,17 +85,17 @@ namespace Crast.Accesser.DriveAccesser{
 
 
         // --- 拡張：ファイル管理 ---
-        public abstract Task<IFilePath> CreateEmptyFile(IDirectoryPath path, string name, FileSystemType fileType, bool canWrite = false, AccesserOption option = default);
-        public abstract Task DeleteFile(IFilePath path, AccesserOption option = default);
-        public abstract Task<IDirectoryPath> CreateDirectory(IDirectoryPath path, string name, bool canWrite = false, AccesserOption option = default);
-        public abstract Task DeleteDirectory(IDirectoryPath path, PermissionScope? scope = null, AccesserOption option = default);
-        public abstract Task ClearDirectory(IDirectoryPath path, FileSystemType fileType = FileSystemType.All, bool recursive = false, AccesserOption option = default);
-        public abstract Task<DriveItemInfo> GetItemInfo(DriveItemPath path, AccesserOption option = default);
-        public abstract Task<bool> ItemExists(DriveItemPath path, AccesserOption option = default);
-        public abstract Task<List<DriveItemInfo>> GetFileListAsync(
+        public abstract Task<IFilePath> CreateEmptyFileAsync(IDirectoryPath path, string name, FileSystemType fileType, bool canWrite = false, AccesserOption option = default);
+        public abstract Task DeleteFileAsync(IFilePath path, AccesserOption option = default);
+        public abstract Task<IDirectoryPath> CreateDirectoryAsync(IDirectoryPath path, string name, bool canWrite = false, AccesserOption option = default);
+        public abstract Task DeleteDirectoryAsync(IDirectoryPath path, PermissionScope? scope = null, AccesserOption option = default);
+        public abstract Task ClearDirectoryAsync(IDirectoryPath path, FileSystemType fileType = FileSystemType.All, PermissionScope? scope = null, AccesserOption option = default);
+        public abstract ValueTask<DriveItemInfo> GetItemInfoAsync(DriveItemPath path, AccesserOption option = default);
+        public abstract ValueTask<bool> ItemExistsAsync(DriveItemPath path, AccesserOption option = default);
+        public abstract IAsyncEnumerable<DriveItemInfo> GetFileListAsync(
             IDirectoryPath path,
             FileSystemType fileType = FileSystemType.All,
-            bool recursive = false,
+            PermissionScope? scope = null,
             AccesserOption option = default
             );
 
@@ -139,13 +146,35 @@ namespace Crast.Accesser.DriveAccesser{
         protected void CheckEmpty() { if (IsEmpty) throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない"); }
         protected DriveItemPath? BasePath = null;
 
+        ////対象が存在し、なおかつ、このAccesserが対象の情報取得権限を持つ事を確認する。
+        //protected virtual async ValueTask ValidateInfo(pathT path) {
+        //    CheckEmpty();
+        //    //情報取得権限が無いならそれ以上の情報は出さない
+        //    if (!await Permission!.IncludeItemPath(path, PermissionScopeType.InformationScope)) throw new UnauthorizedAccessException($"アクセス権限のないpathです: {path}");
+        //    //情報取得権限があっても存在しないならエラー
+        //    if (!await ItemExistsAsync(path)) throw new ArgumentException($"{path}は存在しません");
+        //    //存在してもファイルタイプが合致しないならエラー
+        //    var fileType = (await GetItemInfoAsync(path)).FileType;
+        //    if (!Permission!.FileType.HasFlag(fileType)) throw new UnauthorizedAccessException($"{path} のfileTypeに対する情報取得権限がありません。");
+        //}
+        ////Create権限に関しては、それぞれ一か所でしか扱わないのでメソッド化はしない。
+
+        ////対象に対する指定のFileAccess権限一種を持つことを確認する。対象が存在するかどうかは問わない。
+        //protected virtual async ValueTask ValidateAccess(pathT path, FileSystemAccessLevel level, IfNotExists mode) {
+        //    await ValidateInfo(path);//情報取得権限が無いなら、それ以上の情報は出さない
+
+
+        //}
+
+
+
         // 権限と存在を統合的にチェックする内部メソッド
         protected virtual async ValueTask ValidateAccess(pathT path, FileSystemAccessLevel requiredIfExist, FileSystemAccessLevel requiredIfNotExist){
             CheckEmpty();
             //pathを含まないなら権限も何もない
             if (! await Permission!.IncludeItemPath(path, PermissionScopeType.InformationScope)) throw new ArgumentException($"アクセス権限のないpathです: {path}");
 
-            if (ItemExists(path)){
+            if (await ItemExistsAsync(path)){
                 // 対象ファイルが存在するならrequiredIfExist権限の確認
                 if (requiredIfExist == FileSystemAccessLevel.None) throw new UnauthorizedAccessException($"存在する{path} の不在を前提とした操作です");
                 if ((Permission!.AccessLevel & requiredIfExist) != requiredIfExist)
@@ -256,73 +285,73 @@ namespace Crast.Accesser.DriveAccesser{
 
 
         // --- 拡張：ファイル管理 ---
-        public abstract FileT CreateEmptyFile<FileT, DirectoryT>(DirectoryT path, string name, FileSystemType fileType = FileSystemType.All, bool canWrite = false, AccesserOption option = default) where DirectoryT : pathT, IDirectoryPath where FileT : pathT, IFilePath;
-        async Task<IFilePath> IDriveAccesser.CreateEmptyFile(IDirectoryPath path, string name, FileSystemType fileType,bool canWrite, AccesserOption option){
+        public abstract Task<FileT> CreateEmptyFileAsync<FileT, DirectoryT>(DirectoryT path, string name, FileSystemType fileType = FileSystemType.All, bool canWrite = false, AccesserOption option = default) where DirectoryT : pathT, IDirectoryPath where FileT : pathT, IFilePath;
+        async Task<IFilePath> IDriveAccesser.CreateEmptyFileAsync(IDirectoryPath path, string name, FileSystemType fileType,bool canWrite, AccesserOption option){
             if (path is pathT){
                 return await ((dynamic)this).CreateEmptyFile((dynamic)path, name, fileType, canWrite, option);
             }else{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
         }
-        public abstract void DeleteFile<FileT>(FileT path, AccesserOption option = default) where FileT : pathT, IFilePath;
-        async Task IDriveAccesser.DeleteFile(IFilePath path, AccesserOption option){
+        public abstract Task DeleteFileAsync<FileT>(FileT path, AccesserOption option = default) where FileT : pathT, IFilePath;
+        async Task IDriveAccesser.DeleteFileAsync(IFilePath path, AccesserOption option){
             if (path is pathT){
                 await ((dynamic)this).DeleteFile((dynamic)path, option);
             }else{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
         }
-        public abstract DirectoryT CreateDirectory<DirectoryT>(DirectoryT path, string name, bool canWrite = false, AccesserOption option = default) where DirectoryT : pathT, IDirectoryPath;
-        async Task<IDirectoryPath> IDriveAccesser.CreateDirectory(IDirectoryPath path, string name, bool canWrite, AccesserOption option){
+        public abstract Task<DirectoryT> CreateDirectoryAsync<DirectoryT>(DirectoryT path, string name, bool canWrite = false, AccesserOption option = default) where DirectoryT : pathT, IDirectoryPath;
+        async Task<IDirectoryPath> IDriveAccesser.CreateDirectoryAsync(IDirectoryPath path, string name, bool canWrite, AccesserOption option){
             if (path is pathT){
                 return await ((dynamic)this).CreateDirectory((dynamic)path, name, canWrite, option);
             }else{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
         }
-        public abstract void DeleteDirectory<DirectoryT>(DirectoryT path, PermissionScope? scope = null, AccesserOption option = default) where DirectoryT : pathT, IDirectoryPath;
-        async Task IDriveAccesser.DeleteDirectory(IDirectoryPath path, PermissionScope? scope, AccesserOption option){
+        public abstract Task DeleteDirectoryAsync<DirectoryT>(DirectoryT path, PermissionScope? scope = null, AccesserOption option = default) where DirectoryT : pathT, IDirectoryPath;
+        async Task IDriveAccesser.DeleteDirectoryAsync(IDirectoryPath path, PermissionScope? scope, AccesserOption option){
             if (path is pathT){
                 await ((dynamic)this).DeleteDirectory((dynamic)path, scope, option);
             }else{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
         }
-        public abstract void ClearDirectory<DirectoryT>(DirectoryT path, FileSystemType fileType = FileSystemType.All, bool recursive = false, AccesserOption option = default) where DirectoryT : pathT, IDirectoryPath;
-        async Task IDriveAccesser.ClearDirectory(IDirectoryPath path, FileSystemType fileType, bool recursive, AccesserOption option){
+        public abstract Task ClearDirectoryAsync<DirectoryT>(DirectoryT path, FileSystemType fileType = FileSystemType.All, PermissionScope? scope = null, AccesserOption option = default) where DirectoryT : pathT, IDirectoryPath;
+        async Task IDriveAccesser.ClearDirectoryAsync(IDirectoryPath path, FileSystemType fileType, PermissionScope? scope, AccesserOption option){
             if (path is pathT){
-                await ((dynamic)this).ClearDirectory((dynamic)path, fileType, recursive, option);
+                await ((dynamic)this).ClearDirectory((dynamic)path, fileType, scope, option);
             }else{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
         }
 
-        public abstract bool ItemExists(pathT path, AccesserOption option = default);
-        async Task<bool> IDriveAccesser.ItemExists(DriveItemPath path, AccesserOption option){
+        public abstract ValueTask<bool> ItemExistsAsync(pathT path, AccesserOption option = default);
+        async ValueTask<bool> IDriveAccesser.ItemExistsAsync(DriveItemPath path, AccesserOption option){
             if (path is pathT){
                 return await ((dynamic)this).ItemExists((dynamic)path, option);
             }else{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
         }
-        public abstract DriveItemInfo GetItemInfo(pathT path, AccesserOption option = default);
-        async Task<DriveItemInfo> IDriveAccesser.GetItemInfo(DriveItemPath path, AccesserOption option){
+        public abstract ValueTask<DriveItemInfo> GetItemInfoAsync(pathT path, AccesserOption option = default);
+        async ValueTask<DriveItemInfo> IDriveAccesser.GetItemInfoAsync(DriveItemPath path, AccesserOption option){
             if (path is pathT){
                 return await ((dynamic)this).GetItemInfo((dynamic)path, option);
             }else{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
         }
-        public abstract Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(
+        public abstract IAsyncEnumerable<DriveItemInfo> GetFileListAsync<DirectoryT>(
             DirectoryT path,
             FileSystemType fileType = FileSystemType.All,
-            bool recursive = false,
+            PermissionScope? scope = null,
             AccesserOption option = default
             )
             where DirectoryT : pathT, IDirectoryPath;
-        async Task<List<DriveItemInfo>> IDriveAccesser.GetFileListAsync(IDirectoryPath path, FileSystemType fileType, bool recursive, AccesserOption option){
+        async IAsyncEnumerable<DriveItemInfo> IDriveAccesser.GetFileListAsync(IDirectoryPath path, FileSystemType fileType, PermissionScope? scope, AccesserOption option){
             if (path is pathT){
-                return await ((dynamic)this).GetFileListAsync((dynamic)path, fileType, recursive, option);
+                await foreach (var info in (IAsyncEnumerable<DriveItemInfo>)((dynamic)this).GetFileListAsync((dynamic)path, fileType, scope, option)) yield return info;
             }else{
                 throw new ArgumentException($"不適切なパス型: {path?.GetType().Name}");
             }
@@ -368,14 +397,14 @@ namespace Crast.Accesser.DriveAccesser{
             if (!allowEmpty) throw new ArgumentException("空権限を許可しない状況下でのEmptyDriveAccesser生成");
         }
         //abstractメソッドを実装するが、全て例外を返すだけで起動はしない。
-        public override DriveItemInfo GetItemInfo(DriveItemPath path, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
-        public override Task<List<DriveItemInfo>> GetFileListAsync<DirectoryT>(DirectoryT path, FileSystemType fileType = FileSystemType.All, bool recursive = false, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
-        public override bool ItemExists(DriveItemPath path, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
-        public override FileT CreateEmptyFile<FileT, DirectoryT>(DirectoryT path, string name, FileSystemType fileType, bool canWrite = false, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
-        public override void DeleteFile<FileT>(FileT path, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
-        public override DirectoryT CreateDirectory<DirectoryT>(DirectoryT path, string name, bool canWrite = false, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
-        public override void DeleteDirectory<DirectoryT>(DirectoryT path, PermissionScope? scope = null, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
-        public override void ClearDirectory<DirectoryT>(DirectoryT path, FileSystemType fileType = FileSystemType.All, bool recursive = false, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override ValueTask<DriveItemInfo> GetItemInfoAsync(DriveItemPath path, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override IAsyncEnumerable<DriveItemInfo> GetFileListAsync<DirectoryT>(DirectoryT path, FileSystemType fileType = FileSystemType.All, PermissionScope? scope = null, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override ValueTask<bool> ItemExistsAsync(DriveItemPath path, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override Task<FileT> CreateEmptyFileAsync<FileT, DirectoryT>(DirectoryT path, string name, FileSystemType fileType, bool canWrite = false, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override Task DeleteFileAsync<FileT>(FileT path, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override Task<DirectoryT> CreateDirectoryAsync<DirectoryT>(DirectoryT path, string name, bool canWrite = false, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override Task DeleteDirectoryAsync<DirectoryT>(DirectoryT path, PermissionScope? scope = null, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
+        public override Task ClearDirectoryAsync<DirectoryT>(DirectoryT path, FileSystemType fileType = FileSystemType.All, PermissionScope? scope = null, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override Task SaveObjectAsync<T, FileT>(FileT path, T data, AccesserOption option = default) => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");
         public override Task<T?> LoadObjectAsync<T, FileT>(FileT path, AccesserOption option = default) where T : default => throw new UnauthorizedAccessException($"空権限Accesserであるため、メソッドを起動できない");

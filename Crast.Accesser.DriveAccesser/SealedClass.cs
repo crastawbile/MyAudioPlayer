@@ -1,5 +1,6 @@
 ﻿
 using Crast.Utilities.ExtensionMethods;
+using System.ComponentModel.Design;
 using System.Numerics;
 using System.Reflection.Metadata.Ecma335;
 using System.Runtime.InteropServices;
@@ -86,6 +87,20 @@ namespace Crast.Accesser.DriveAccesser{
                 return false;
             }
         }
+        /// <summary>
+        /// 二つのスコープの共通部分を返す。
+        /// </summary>
+        /// <remarks>
+        /// 共通部分が無い場合はEmptyを返す。
+        /// </remarks>
+        /// <param name="other"></param>
+        /// <returns></returns>
+        public PermissionScope Trim(PermissionScope other) {
+            var start = Math.Max(Start, other.Start);
+            var end = Math.Min(End, other.End);
+            if (start < end) return new PermissionScope(start, end);
+            else return Empty;
+        }
         public PermissionScope Rebased(int depth) {
             if (IsEmpty) return Empty;
             if (End <= depth) return Empty;
@@ -113,16 +128,16 @@ namespace Crast.Accesser.DriveAccesser{
         public FileSystemAccessLevel AccessLevel { get; init; }
         public FileSystemType FileType { get; init; }
         public bool CanCreate { get; init; }
-        public bool CanNotAccess => AccessLevel == FileSystemAccessLevel.None;
-        public bool CanSingleAccess => AccessLevel != FileSystemAccessLevel.None && (AccessLevel & (AccessLevel - 1)) == 0;//アクセスレベルが一つだけのときtrue。空権限はfalse。
 
-        #region 簡易読み取り用のプロパティ
+        #region 簡易読み取り用のフィールド
         public bool IsDirectory { get; init; }
         public bool CanRead { get; init; }
         public bool CanAppend { get; init; }
         public bool CanDelete { get; init; }
         public bool CanWrite { get; init; }
         public bool CanNotAny { get; init; }
+        public bool CanNotAccess { get; init; }
+        public bool CanSingleAccess { get; init; }
         #endregion
 
         //コンストラクタ　正規の組み合わせかチェックする都合でプライマリコンストラクタではない
@@ -156,13 +171,16 @@ namespace Crast.Accesser.DriveAccesser{
                 throw new ArgumentException($"未定義のpath型{path}");
             }
 
-            #region プロパティ代入
+            #region フィールド代入
             DriveType = driveType;
             Path = path;
             InformationScope = informationScope;
             ItemCreateScope = itemCreateScope;
             FileAccessScope = fileAccessScope;
             FileType = fileType;
+
+            CanNotAccess = AccessLevel == FileSystemAccessLevel.None;
+            CanSingleAccess = AccessLevel != FileSystemAccessLevel.None && (AccessLevel & (AccessLevel - 1)) == 0;//アクセスレベルが一つだけのときtrue。空権限はfalse。
 
             CanRead = AccessLevel.HasFlag(FileSystemAccessLevel.ReadOnly);
             CanAppend = AccessLevel.HasFlag(FileSystemAccessLevel.AppendOnly);
@@ -220,6 +238,15 @@ namespace Crast.Accesser.DriveAccesser{
             return false;
         }
 
+        /// <summary>
+        /// 起点パスを引数パスに置き換える
+        /// </summary>
+        /// <remarks>
+        /// 引数パスが自身の起点パス以下でなければnull。
+        /// 以下であれば、起点パスを置き換えてscopeもrebasedにする。
+        /// </remarks>
+        /// <param name="path"></param>
+        /// <returns></returns>
         public async ValueTask<FileSystemPermission?> Rebased(DriveItemPath path) {
             if (await Path.GetDepth(path) is int depth) {
                 var informationScope = InformationScope.Rebased(depth);
@@ -242,6 +269,41 @@ namespace Crast.Accesser.DriveAccesser{
             } else {
                 return null;
             }
+        }
+        /// <summary>
+        /// 全てのスコープを、引数パス起点の引数スコープ範囲内に限定する。
+        /// </summary>
+        /// <remarks>
+        /// 引数パスが自身の起点パス以上でなければnull。
+        /// 以上であれば、起点パスはそのままでスコープのみtrimする。
+        /// </remarks>
+        /// <param name="path"></param>
+        /// <param name="scope"></param>
+        /// <returns></returns>
+        public async ValueTask<FileSystemPermission?> Trim(DriveItemPath path, PermissionScope scope) {
+            if (await path.GetDepth(Path) is int depth){
+                var targetScope = scope.Rebased(depth);
+                var informationScope = InformationScope.Trim(targetScope);
+                var itemCreateScope = ItemCreateScope.Trim(targetScope);
+                var fileAccessScope = FileAccessScope.Trim(targetScope);
+
+                //スコープが空なら対応する権限も消しておく
+                var accessLevel = CanCreate && !itemCreateScope.IsEmpty ? AccessLevel | FileSystemAccessLevel.CreateOnly : AccessLevel;
+                if (fileAccessScope.IsEmpty) accessLevel = FileSystemAccessLevel.None;
+
+                return new FileSystemPermission(
+                    driveType: DriveType,
+                    path: Path,
+                    informationScope: informationScope,
+                    itemCreateScope: itemCreateScope,
+                    fileAccessScope: fileAccessScope,
+                    accessLevel: accessLevel,
+                    fileType: FileType
+                    );
+            }else{
+                return null;
+            }
+
         }
 
         //合成可能か判定するのに邪魔になる不要な権限スコープを削除する処理
@@ -275,7 +337,7 @@ namespace Crast.Accesser.DriveAccesser{
         /// <param name="Other"></param>
         /// <param name="merged"></param>
         /// <returns></returns>
-        public bool TryMergeAccessScope(FileSystemPermission other, out FileSystemPermission merged) {
+        public bool TryMergeScope(FileSystemPermission other, out FileSystemPermission merged) {
             merged = other;
             if (Path != other.Path) return false;
             if (FileType != other.FileType) return false;
@@ -339,7 +401,7 @@ namespace Crast.Accesser.DriveAccesser{
                     FileSystemType.All),
         };
         private readonly Dictionary<string, FileSystemPermission> _permissions;
-        public static FileSystemPermissionBundle Master => new(_root);
+        public static FileSystemPermissionBundle Master =>new (_root);//検証不要なため、ファクトリメソッドを経由する必要が無い。
         public static FileSystemPermissionBundle AccessTestPermissionBundle
             => Master.GetPart(["AbsoluteAccessTest", "RelativeAccessTest"]);
         public static FileSystemPermissionBundle AbsoluteAccessTestPermission
@@ -348,14 +410,15 @@ namespace Crast.Accesser.DriveAccesser{
             => Master.GetPart("RelativeAccessTest");
         //コンストラクタはprivate指定。必要な権限はMasterのように対応するプロパティを作成してゲッターから配布する。
         //もしくは、アクセス権限小型化メソッドから生成する。
-        //コンストラクタでは非同期処理を行えないため、ファクトリメソッドであるCreateを経由する。
+        //コンストラクタでは非同期処理を行えないため、検証が必要な場合はファクトリメソッドであるCreateを経由する。
+        //でも、privateだとどうせ検証不要じゃないか……？
         private FileSystemPermissionBundle(Dictionary<string, FileSystemPermission> permissions){
             _permissions = permissions;
         }
         private static async ValueTask<FileSystemPermissionBundle> Create(Dictionary<string, FileSystemPermission> permissions, FileSystemPermissionBundle? basePermissions = null) {
             var newPermission = new FileSystemPermissionBundle(permissions);
             var upperPermissions = basePermissions?._permissions ?? _root;
-            await newPermission.IsPartOf(upperPermissions);//権限外なら例外が出る
+            if (await newPermission.IsPartOf(upperPermissions)) throw new UnauthorizedAccessException($"{permissions}は{upperPermissions}の範囲内ではない");
             return newPermission;
         }
 
@@ -414,8 +477,8 @@ namespace Crast.Accesser.DriveAccesser{
         public FileSystemPermissionBundle GetPart(string key, bool allowEmpty = true){
             var dict = new Dictionary<string, FileSystemPermission>();
             if (_permissions.TryGetValue(key, out var p)) dict[key] = p;
-            if (!allowEmpty && dict.Count == 0) throw new ArgumentException(key + "に該当する権限が存在しない");
-            return new FileSystemPermissionBundle(dict);
+            if (!allowEmpty && dict.Count == 0) throw new ArgumentException($"{key}に該当する権限が存在しない");
+            return new(dict);
         }
         /// <summary>
         /// _rootの名称で複数取り出し
@@ -431,7 +494,7 @@ namespace Crast.Accesser.DriveAccesser{
                 if (_permissions.TryGetValue(key, out var p)) dict[key] = p;
             }
             if (!allowEmpty && dict.Count == 0) throw new ArgumentException(string.Join(", ", keys) + "に該当する権限がひとつも存在しない");
-            return new FileSystemPermissionBundle(dict);
+            return new(dict);
         }
         /// <summary>
         /// DriveTypeで複数取り出し
@@ -447,7 +510,7 @@ namespace Crast.Accesser.DriveAccesser{
                 if (p.DriveType == type) dict[key] = p;
             }
             if (!allowEmpty && dict.Count == 0) throw new ArgumentException($"{type}に該当する権限が存在しない");
-            return new FileSystemPermissionBundle(dict);
+            return new(dict);
         }
         /// <summary>
         /// DriveItemPathで複数取り出し(同じフォルダに対しても拡張子別に権限が分かれていることはある)
@@ -463,7 +526,7 @@ namespace Crast.Accesser.DriveAccesser{
                 if (p.Path == path) dict[key] = p;
             }
             if (!allowEmpty && dict.Count == 0) throw new ArgumentException($"{path}に該当する権限が存在しない");
-            return new FileSystemPermissionBundle(dict);
+            return new(dict);
         }
         /// <summary>
         /// AccessLevelで以上か以下を複数取り出し
@@ -484,7 +547,7 @@ namespace Crast.Accesser.DriveAccesser{
                 if (isLower) throw new ArgumentException($"{accessLevel}以下に該当する権限が存在しない");
                 else throw new ArgumentException($"{accessLevel}以上に該当する権限が存在しない");
             }
-            return new FileSystemPermissionBundle(dict);
+            return new(dict);
         }
         #endregion
 
@@ -493,11 +556,40 @@ namespace Crast.Accesser.DriveAccesser{
             var dict = new Dictionary<string, FileSystemPermission>();
             foreach (var (key, p) in _permissions){
                 var newLevel = p.AccessLevel & accessLevel;
-                if (newLevel == FileSystemAccessLevel.None) continue;
-                dict[key] = p with { AccessLevel = newLevel };
+                if (newLevel == FileSystemAccessLevel.None) {
+                    dict[key] = new FileSystemPermission(
+                        p.DriveType,
+                        p.Path,
+                        p.InformationScope,
+                        PermissionScope.Empty,
+                        PermissionScope.Empty,
+                        FileSystemAccessLevel.None,
+                        p.FileType
+                        );
+                } else if (newLevel == FileSystemAccessLevel.CreateOnly) {
+                    dict[key] = new FileSystemPermission(
+                        p.DriveType,
+                        p.Path,
+                        p.InformationScope,
+                        p.ItemCreateScope,
+                        PermissionScope.Empty,
+                        FileSystemAccessLevel.CreateOnly,
+                        p.FileType
+                        );
+                } else {
+                    dict[key] = new FileSystemPermission(
+                        p.DriveType,
+                        p.Path,
+                        p.InformationScope,
+                        p.ItemCreateScope,
+                        p.FileAccessScope,
+                        newLevel,
+                        p.FileType
+                        );
+                }
             }
             if (!allowEmpty && dict.Count == 0) throw new ArgumentException($"{accessLevel}に該当する権限が存在しない");
-            return new FileSystemPermissionBundle(dict);
+            return new(dict);
         }
         //全ての権限の対応するFileSystemTypeを狭く変更する
         public FileSystemPermissionBundle NarrowFileSystemType(FileSystemType type, bool allowEmpty = true){
@@ -508,22 +600,34 @@ namespace Crast.Accesser.DriveAccesser{
                 dict[key] = p with { FileType = newType };
             }
             if (!allowEmpty && dict.Count == 0) throw new ArgumentException($"{type}に該当する権限が存在しない");
-            return new FileSystemPermissionBundle(dict);
+            return new(dict);
         }
-        //全ての権限の対応するDriveItemPathを狭く変更する
-        public async ValueTask<FileSystemPermissionBundle> NarrowPath(DriveItemPath path, bool allowEmpty = true){
+        //全ての権限の対応するDriveItemPathとscopeを狭く変更する
+        public async ValueTask<FileSystemPermissionBundle> NarrowPathAsync(DriveItemPath path, PermissionScope? scope = null, bool allowEmpty = true){
             var dict = new Dictionary<string, FileSystemPermission>();
             foreach (var (key, permission) in _permissions){
                 //対象パスの下に入るパスを起点とする権限も自動的に含まれる
-                if (await permission.Rebased(path) is FileSystemPermission p) dict[key] = p ;
+                if (await permission.Rebased(path) is not FileSystemPermission rebased) continue;
+
+                if (scope is null) {
+                    if (!rebased.InformationScope.IsEmpty) dict[key] = rebased;
+                } else {
+                    if (await permission.Trim(path, scope.Value) is FileSystemPermission trimed && !trimed.InformationScope.IsEmpty) dict[key] = trimed;
+                }
             }
             if (!allowEmpty && dict.Count == 0) throw new ArgumentException($"{path}を含む権限が存在しない");
-            return new FileSystemPermissionBundle(dict);
+            return new(dict);
         }
         //Narrow系列全部をまとめて実行する
-        public async ValueTask<FileSystemPermissionBundle> Narrow(DriveItemPath? path = null, FileSystemType? fileType = null, FileSystemAccessLevel? accessLevel = null, bool allowEmpty = true){
+        public async ValueTask<FileSystemPermissionBundle> NarrowAsync(
+            DriveItemPath? path = null,
+            PermissionScope? scope = null,
+            FileSystemType? fileType = null,
+            FileSystemAccessLevel? accessLevel = null,
+            bool allowEmpty = true
+            ){
             FileSystemPermissionBundle result = this;
-            if (path is DriveItemPath p) result = await result.NarrowPath(p, allowEmpty);
+            if (path is DriveItemPath p) result = await result.NarrowPathAsync(p, scope, allowEmpty);
             if (fileType is FileSystemType t) result = result.NarrowFileSystemType(t, allowEmpty);
             if (accessLevel is FileSystemAccessLevel l) result = result.NarrowAccessLevel(l, allowEmpty);
             return result.MergeAccessLevel();
@@ -533,23 +637,93 @@ namespace Crast.Accesser.DriveAccesser{
         public FileSystemPermissionBundle MergeAccessLevel(){
             var after = new Dictionary<string, FileSystemPermission>();
             foreach (var (k, p) in _permissions) after = MergeAccessLevel(after, k, p);
-            return new FileSystemPermissionBundle(after);
+            return new(after);
         }
         //ループ内部の処理を、同名のprivateメソッドとして切り出してある。
         private static Dictionary<string, FileSystemPermission> MergeAccessLevel(Dictionary<string, FileSystemPermission> dict, string key, FileSystemPermission permission){
+            bool merged = false;
             foreach (var (k, p) in dict){
                 if (p.DriveType == permission.DriveType &&
                     p.Path == permission.Path &&
-                    p.FileAccessScope == permission.FileAccessScope &&
                     p.FileType == permission.FileType
                 ){
-                    dict[k] = p with { AccessLevel = p.AccessLevel | permission.AccessLevel };
-                }else{
-                    dict[key] = permission;
+                    if (p.FileAccessScope != PermissionScope.Empty &&
+                        permission.FileAccessScope != PermissionScope.Empty &&
+                        p.FileAccessScope != permission.FileAccessScope
+                        ) {
+                        continue;
+                    }
+                    permission.InformationScope.TryMerge(p.InformationScope, out var informationScope);
+                    permission.ItemCreateScope.TryMerge(p.ItemCreateScope, out var itemCreateScope);
+                    var accessLevel = p.AccessLevel | permission.AccessLevel;
+                    if (p.CanCreate || permission.CanCreate) accessLevel |= FileSystemAccessLevel.CreateOnly;
+                    dict[k] = new FileSystemPermission(
+                        driveType : permission.DriveType,
+                        path : permission.Path,
+                        informationScope : informationScope,
+                        itemCreateScope : itemCreateScope,
+                        fileAccessScope : permission.FileAccessScope,
+                        accessLevel : accessLevel,
+                        fileType : permission.FileType
+                        );
+
+                    merged = true;
                 }
             }
+            if(!merged) dict[key] = permission;
             return dict;
         }
+        public FileSystemPermissionBundle MergeFileType(){
+            var after = new Dictionary<string, FileSystemPermission>();
+            foreach (var (k, p) in _permissions) after = MergeFileType(after, k, p);
+            return new(after);
+        }
+        private static Dictionary<string, FileSystemPermission> MergeFileType(Dictionary<string, FileSystemPermission> dict, string key, FileSystemPermission permission){
+            bool merged = false;
+            foreach (var (k, p) in dict){
+                if (p.DriveType == permission.DriveType &&
+                    p.Path == permission.Path &&
+                    p.InformationScope == permission.InformationScope &&
+                    p.ItemCreateScope == permission.ItemCreateScope &&
+                    p.FileAccessScope == permission.FileAccessScope &&
+                    p.AccessLevel == permission.AccessLevel 
+                ){
+                    dict[k] = new FileSystemPermission(
+                        driveType: permission.DriveType,
+                        path: permission.Path,
+                        informationScope: permission.InformationScope,
+                        itemCreateScope: permission.ItemCreateScope,
+                        fileAccessScope: permission.FileAccessScope,
+                        accessLevel: permission.AccessLevel,
+                        fileType: permission.FileType | p.FileType
+                        );
+
+                    merged = true;
+                }
+            }
+            if (!merged) dict[key] = permission;
+            return dict;
+        }
+
+        /// <summary>
+        /// TraficDriveManager用の、パス一つに対する権限を抽出する処理
+        /// </summary>
+        /// <remarks>
+        /// スコープも(0,1)に限定する。
+        /// </remarks>
+        /// <param name="path"></param>
+        /// <param name="fileType"></param>
+        /// <param name="level"></param>
+        /// <returns></returns>
+        public async ValueTask<FileSystemPermissionBundle> ComposeToSinglePathAsync(DriveItemPath path, FileSystemType fileType, FileSystemAccessLevel level) {
+            var p = await NarrowAsync(path, PermissionScope.SelfOnly, fileType, level);
+            return p.MergeAccessLevel().MergeFileType().MergeAccessLevel().MergeFileType();
+        }
+        public async ValueTask<FileSystemPermissionBundle> ComposeToSingleDirectoryAsync(DriveItemPath path, FileSystemType fileType){
+            var p = await NarrowAsync(path, PermissionScope.SelfAndChildren, fileType, FileSystemAccessLevel.CreateOnly);
+            return p.MergeAccessLevel().MergeFileType().MergeAccessLevel().MergeFileType();
+        }
+
     }
 
     #endregion

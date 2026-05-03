@@ -1,6 +1,7 @@
-﻿using System.Text;
+﻿using Crast.Utilities.ExtensionMethods;
+using Microsoft.VisualBasic.FileIO;
 using Newtonsoft.Json;
-using Crast.Utilities.ExtensionMethods;
+using System.Text;
 
 
 namespace Crast.Accesser.DriveAccesser{
@@ -84,11 +85,21 @@ namespace Crast.Accesser.DriveAccesser{
             }
             return null;            
         }
+        public int? GetDepth(FileInfo info) {
+            var count = 0;
+            var current = info.FullName;
+            while (current != null){
+                if (current == Value) return count;
+                current = Path.GetDirectoryName(current);
+                count++;
+            }
+            return null;
+        }
     }
 
 
 
-    internal class LocalDriveAccesser : SingleDriveAccesserGeneric<LocalDrivePath>{
+    internal sealed class LocalDriveAccesser : SingleDriveAccesserGeneric<LocalDrivePath>{
 
         public LocalDriveAccesser(FileSystemPermissionBundle permission, bool allowEmpty = false, bool singleOnly = true)
             : base(permission, allowEmpty, singleOnly)
@@ -96,9 +107,11 @@ namespace Crast.Accesser.DriveAccesser{
             if(Permission?.Path is LocalDrivePath ldp) BasePath = ldp;
         }
         protected new LocalDrivePath? BasePath = null;
-        protected override void ValidateAccess(LocalDrivePath path, FileSystemAccessLevel requiredIfExist, FileSystemAccessLevel requiredIfNotExist){
+
+        //処理がちゃんと通ったら、整備性のために共通処理をまとめる。それまでは放置
+        protected override async ValueTask ValidateAccess(LocalDrivePath path, FileSystemAccessLevel requiredIfExist, FileSystemAccessLevel requiredIfNotExist){
             // 1. 基底クラスの権限＆パススコープ＆存在チェック
-            base.ValidateAccess(path, requiredIfExist, requiredIfNotExist);
+            await base.ValidateAccess(path, requiredIfExist, requiredIfNotExist);
 
             // 2. LocalDrive特有の拡張子チェック
             if (path is LocalFilePath filePath){
@@ -108,7 +121,11 @@ namespace Crast.Accesser.DriveAccesser{
             }
         }
 
-        public override DriveItemInfo GetItemInfo(LocalDrivePath path, AccesserOption option = default){
+        public override ValueTask<DriveItemInfo> GetItemInfoAsync(LocalDrivePath path, AccesserOption option = default){
+            return ValueTask.FromResult(GetItemInfo(path));
+        }
+        public DriveItemInfo GetItemInfo(LocalDrivePath path, AccesserOption option = default){
+            //ファイルかフォルダかで処理が完全に切り替わるためヘルパーメソッドに書き出し。
             if (path is LocalFilePath f) return GetFileInfo(f);
             else if (path is LocalDirectoryPath d) return GetDirectoryInfo(d);
             else throw new ArgumentException($"未定義のパス型{path}");
@@ -149,8 +166,8 @@ namespace Crast.Accesser.DriveAccesser{
                 throw new UnauthorizedAccessException("フォルダへのアクセス権限が不足しています。");
             }
         }
-        public new DriveItemInfo[] GetFileListAsync(
-            LocalDirectoryPath path,
+        public override IAsyncEnumerable<DriveItemInfo> GetFileListAsync<DirectoryT>(
+            DirectoryT path,
             FileSystemType fileType = FileSystemType.All,
             PermissionScope? scope = null,
             AccesserOption option = default
@@ -158,21 +175,23 @@ namespace Crast.Accesser.DriveAccesser{
         {
             CheckEmpty();
             var infoScope = scope != null ? scope.Value : PermissionScope.ChildrenOnly;
-            DriveItemInfo[] list = [];
-
-            //指定したfolderの子に対するアクセス権限があるかどうかをまず確認
-            if (Permission!.IncludeScope(PermissionScope.ChildrenOnly) && Permission.Path == path) { }
-            else if (Permission!.IncludeScope(PermissionScope.Recursive) && Permission.Path != path && Permission.IncludeItemPath(path)) { }
-            else { throw new UnauthorizedAccessException("フォルダへのアクセス権限が不足しています。"); }
-
-            var option = recursive && Permission!.IncludeScope(PermissionScope.Recursive) ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+            //まずは対象Pathが権限範囲内かどうか、もしくは、権限範囲が対象pathの下部構造か。そして権限スコープと引数スコープの共通範囲が存在するかどうか。
+            //共通範囲が存在しないなら空配列を返して終了。
+            if (GetFileListAsync((dynamic)path, infoScope, out LocalDirectoryPath basePath, out PermissionScope targetScope, out List<DriveItemInfo> result)) return result.FromEnumerable();
+            if (targetScope == PermissionScope.SelfOnly) return result.FromEnumerable();
+            //これ以降は、basePathを起点とするtargetScope範囲のtargetType種別のファイルをリストアップする処理。
+            var targetType = Permission!.FileType & fileType;
+            var searchOption = PermissionScope.SelfAndChildren.Include(targetScope) ? System.IO.SearchOption.AllDirectories : System.IO.SearchOption.TopDirectoryOnly;
             var di = new DirectoryInfo(path.Value);
-
-            return di.GetFiles("*", option)
+            
+            return di.EnumerateFiles("*", searchOption)
                 .Where(f => 
-                    f.Extension.FromExtension().InFlag(fileType)
-                    && Permission.Contains(f.Extension.FromExtension())
+                    f.Extension.FromExtension().InFlag(targetType)
                 ) // 拡張子フィルタ適用
+                .Where(f =>
+                    basePath.GetDepth(new LocalFilePath(f.FullName)) is int d &&
+                    targetScope.Include(d)
+                )//スコープでフィルタする処理
                 .Select(f => new DriveItemInfo(
                     Name: f.Name,
                     DriveType: DriveTypeEnum.LocalDrive,
@@ -181,10 +200,38 @@ namespace Crast.Accesser.DriveAccesser{
                     Size: f.Length,
                     LastModified: f.LastWriteTime,
                     IsDirectory: false
-                ))
-                .ToList();
+                ))//各要素をDriveItemInfo型に変換
+                .FromEnumerable();//非同期ストリーム型に変換
         }
-        public override bool ItemExists(LocalDrivePath path){
+        //内部処理の一部を同名メソッドで切り出してある
+        //早期returnの場合はtrue、後の処理に進む場合はfalse
+        private bool GetFileListAsync(LocalDirectoryPath path, PermissionScope infoScope, out LocalDirectoryPath? basePath, out PermissionScope targetScope, out List<DriveItemInfo> result) {
+            basePath = default;
+            targetScope = default;
+            result = new List<DriveItemInfo>();
+            if (BasePath is LocalDirectoryPath directoryPath1 && directoryPath1.GetDepth(path) is int depth1){
+                basePath = path;
+                targetScope = InformationScope!.Value.Rebased(depth1).Trim(infoScope);
+                if (targetScope == PermissionScope.Empty) return true;
+            }else if (path.GetDepth(BasePath!) is int depth2){
+                if (BasePath is LocalFilePath filePath){
+                    //権限パスのファイル一つだけが表示範囲であり、GetFiles()が不要な場合
+                    if (infoScope.Include(depth2)) result.Add(GetFileInfo(filePath));
+                    return true;
+                }else if (BasePath is LocalDirectoryPath directoryPath2){
+                    basePath = directoryPath2;
+                    targetScope = infoScope.Rebased(depth2).Trim(InformationScope!.Value);
+                    if (targetScope == PermissionScope.Empty) return true;
+                }
+            }else{
+                return true;
+            }
+            return false;
+        }
+        public override ValueTask<bool> ItemExistsAsync(LocalDrivePath path, AccesserOption option = default){
+            return ValueTask.FromResult(ItemExists(path));
+        }
+        public bool ItemExists(LocalDrivePath path, AccesserOption option = default){
             return path switch{
                 LocalFilePath => File.Exists(Path!.Value),
                 LocalDirectoryPath => Directory.Exists(Path!.Value),
@@ -192,18 +239,23 @@ namespace Crast.Accesser.DriveAccesser{
             };
         }
 
-        public override async Task SaveObjectAsync<dataT, FileT>(FileT path, dataT data){
+        public override async Task SaveObjectAsync<dataT, FileT>(FileT path, dataT data, AccesserOption option = default){
             var json = JsonConvert.SerializeObject(data, Formatting.Indented);
             await SaveTextAsync(path, json);
         }
-        public override async Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path)
+        public override async Task<dataT?> LoadObjectAsync<dataT, FileT>(FileT path, AccesserOption option = default)
             where dataT : default
         {
             var json = await LoadTextAsync(path);
             return JsonConvert.DeserializeObject<dataT>(json);
         }
-        public override async Task SaveRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data){
-            ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.WriteCreate);
+        public override async Task SaveRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanWrite) throw new UnauthorizedAccessException($"{this}は書込権限を持たない");
+            if (!System.IO.Path.GetExtension(path.Value).FromExtension().InFlag(Permission!.FileType)) throw new UnauthorizedAccessException($"{path}の拡張子に対するアクセス権限が無い");
+            if (BasePath!.GetDepth(path) is not int d || !Permission!.FileAccessScope.Include(d)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!ItemExists(path) && !CanCreate) throw new UnauthorizedAccessException($"{path}の作成権限が無い"); 
+
             using var stream = new FileStream(
                 path.Value,
                 FileMode.Create,
@@ -214,9 +266,13 @@ namespace Crast.Accesser.DriveAccesser{
                 );
             await stream.WriteAsync(data);
         }
-        public override async Task AppendRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data)
-        {
-            ValidateAccess(path, FileSystemAccessLevel.AppendOnly, FileSystemAccessLevel.AppendCreate);
+        public override async Task AppendRawAsync<FileT>(FileT path, ReadOnlyMemory<byte> data, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanAppend) throw new UnauthorizedAccessException($"{this}は追記権限を持たない");
+            if (!System.IO.Path.GetExtension(path.Value).FromExtension().InFlag(Permission!.FileType)) throw new UnauthorizedAccessException($"{path}の拡張子に対するアクセス権限が無い");
+            if (BasePath!.GetDepth(path) is not int d || !Permission!.FileAccessScope.Include(d)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!ItemExists(path)) throw new ArgumentException($"{path}にファイルが存在しない");
+
             using var stream = new FileStream(
                 path.Value,
                 FileMode.Append,
@@ -227,8 +283,13 @@ namespace Crast.Accesser.DriveAccesser{
                 );
             await stream.WriteAsync(data);
         }
-        public override async Task<byte[]> LoadRawAsync<FileT>(FileT path){
-            ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
+        public override async Task<byte[]> LoadRawAsync<FileT>(FileT path, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanRead) throw new UnauthorizedAccessException($"{this}は読取権限を持たない");
+            if (!System.IO.Path.GetExtension(path.Value).FromExtension().InFlag(Permission!.FileType)) throw new UnauthorizedAccessException($"{path}の拡張子に対するアクセス権限が無い");
+            if (BasePath!.GetDepth(path) is not int d || !Permission!.FileAccessScope.Include(d)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!ItemExists(path)) throw new ArgumentException($"{path}にファイルが存在しない");
+
             using var stream = new FileStream(
                 path.Value,
                 FileMode.Open,
@@ -241,8 +302,13 @@ namespace Crast.Accesser.DriveAccesser{
             await stream.ReadExactlyAsync(data.AsMemory());
             return data;
         }
-        public override async Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false){
-            ValidateAccess(path, FileSystemAccessLevel.AppendOnly, FileSystemAccessLevel.None);
+        public override async Task AppendTextAsync<FileT>(FileT path, string text, bool withBreak = false, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanAppend) throw new UnauthorizedAccessException($"{this}は追記権限を持たない");
+            if (!System.IO.Path.GetExtension(path.Value).FromExtension().InFlag(Permission!.FileType)) throw new UnauthorizedAccessException($"{path}の拡張子に対するアクセス権限が無い");
+            if (BasePath!.GetDepth(path) is not int d || !Permission!.FileAccessScope.Include(d)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!ItemExists(path)) throw new ArgumentException($"{path}にファイルが存在しない");
+
             var content = withBreak ? text + Environment.NewLine : text;
             using var stream = new FileStream(
                 path.Value,
@@ -255,8 +321,13 @@ namespace Crast.Accesser.DriveAccesser{
             using var writer = new StreamWriter(stream, Config.Encoding);
             await writer.WriteAsync(content);
         }
-        public override async IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null){
-            ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
+        public override async IAsyncEnumerable<string> ReadLinesAsync<FileT>(FileT path, Encoding? encoding = null, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanRead) throw new UnauthorizedAccessException($"{this}は読取権限を持たない");
+            if (!System.IO.Path.GetExtension(path.Value).FromExtension().InFlag(Permission!.FileType)) throw new UnauthorizedAccessException($"{path}の拡張子に対するアクセス権限が無い");
+            if (BasePath!.GetDepth(path) is not int d || !Permission!.FileAccessScope.Include(d)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!ItemExists(path)) throw new ArgumentException($"{path}にファイルが存在しない");
+
             using var stream = new FileStream(
                 path.Value,
                 FileMode.Open,
@@ -268,8 +339,13 @@ namespace Crast.Accesser.DriveAccesser{
             using var reader = new StreamReader(stream, encoding ?? Config.Encoding, detectEncodingFromByteOrderMarks: true);
             while (await reader.ReadLineAsync() is { } line) yield return line;
         }
-        public override async Task SaveTextAsync<FileT>(FileT path, string text,Encoding? encoding = null){
-            ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.WriteCreate);
+        public override async Task SaveTextAsync<FileT>(FileT path, string text,Encoding? encoding = null, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanWrite) throw new UnauthorizedAccessException($"{this}は書込権限を持たない");
+            if (!System.IO.Path.GetExtension(path.Value).FromExtension().InFlag(Permission!.FileType)) throw new UnauthorizedAccessException($"{path}の拡張子に対するアクセス権限が無い");
+            if (BasePath!.GetDepth(path) is not int d || !Permission!.FileAccessScope.Include(d)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!ItemExists(path) && !CanCreate) throw new UnauthorizedAccessException($"{path}の作成権限が無い");
+            
             using var stream = new FileStream(
                         path.Value,
                         FileMode.Create,
@@ -281,8 +357,13 @@ namespace Crast.Accesser.DriveAccesser{
             using var writer = new StreamWriter(stream, encoding ?? Config.Encoding);
             await writer.WriteAsync(text);
         }
-        public override async Task<string> LoadTextAsync<FileT>(FileT path, Encoding? encoding = null){
-            ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
+        public override async Task<string> LoadTextAsync<FileT>(FileT path, Encoding? encoding = null, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanRead) throw new UnauthorizedAccessException($"{this}は読取権限を持たない");
+            if (!System.IO.Path.GetExtension(path.Value).FromExtension().InFlag(Permission!.FileType)) throw new UnauthorizedAccessException($"{path}の拡張子に対するアクセス権限が無い");
+            if (BasePath!.GetDepth(path) is not int d || !Permission!.FileAccessScope.Include(d)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!ItemExists(path)) throw new ArgumentException($"{path}にファイルが存在しない");
+
             using var stream = new FileStream(
                 path.Value,
                 FileMode.Open,
@@ -299,61 +380,97 @@ namespace Crast.Accesser.DriveAccesser{
             return await reader.ReadToEndAsync();
         }
 
-        public override FileT CreateEmptyFile<FileT, DirectoryT>(DirectoryT path, string name, FileSystemType fileType, bool canWrite = false){
-            if(!Permission!.FileType.HasFlag(fileType)) throw new UnauthorizedAccessException($"このファイルタイプの作成権限がありません: {fileType}");
+        public override Task<FileT> CreateEmptyFileAsync<FileT, DirectoryT>(DirectoryT path, string name, FileSystemType fileType, bool canWrite = false, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanCreate) throw new UnauthorizedAccessException($"{this}は作成権限を持たない");
+            if (!Permission!.FileType.HasFlag(fileType)) throw new UnauthorizedAccessException($"このファイルタイプの作成権限がありません: {fileType}");
             var filePathString = System.IO.Path.Combine(path.Value, name);
             var filePath = new LocalFilePath(filePathString);
-            if (canWrite){
-                ValidateAccess(filePath, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.CreateOnly);
-            }else{
-                ValidateAccess(filePath, FileSystemAccessLevel.None, FileSystemAccessLevel.CreateOnly);
+            var depth = 0;
+            if (BasePath!.GetDepth(filePath) is int d) depth = d;
+            else throw new UnauthorizedAccessException($"{path}に対する作成権限が無い");
+            if (!Permission!.ItemCreateScope.Include(depth)) throw new UnauthorizedAccessException($"{path}に対する作成権限が無い");
+
+            if (File.Exists(filePath.Value)) {
+                if (!canWrite) throw new UnauthorizedAccessException($"{filePath}は既に存在する");
+                if (!CanWrite || !Permission!.FileAccessScope.Include(depth)) throw new UnauthorizedAccessException($"{filePath}に対する上書権限が無い");
             }
+
             using (File.Create(filePath.Value)) { }// File.Create は内部的に FileShare.None を使う独占的な実装だが即時クローズするので影響は無いはず
-            if (filePath is FileT f) return f;
+            if (filePath is FileT f) return Task.FromResult(f);
             else throw new TypeAccessException($"在り得ないはずの型キャスト{filePath}");
         }
-        public override void DeleteFile<FileT>(FileT path){
-            ValidateAccess(path, FileSystemAccessLevel.DeleteOnly, FileSystemAccessLevel.All);//ファイルが存在しないなら何もしないので権限に制限はかけない
+        public override Task DeleteFileAsync<FileT>(FileT path, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanDelete) throw new UnauthorizedAccessException($"{this}は削除権限を持たない");
+            if (!System.IO.Path.GetExtension(path.Value).FromExtension().InFlag(Permission!.FileType)) throw new UnauthorizedAccessException($"{path}の拡張子に対するアクセス権限が無い");
+            if (BasePath!.GetDepth(path) is not int d || !Permission!.FileAccessScope.Include(d)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+
             if (File.Exists(path.Value)) File.Delete(path.Value);
+            return Task.CompletedTask;
         }
-        public override DirectoryT CreateDirectory<DirectoryT>(DirectoryT path, string name, bool canWrite = false){
+        public override Task<DirectoryT> CreateDirectoryAsync<DirectoryT>(DirectoryT path, string name, bool canWrite = false, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanCreate) throw new UnauthorizedAccessException($"{this}は作成権限を持たない");
+            if (!Permission!.FileType.HasFlag(FileSystemType.Directory)) throw new UnauthorizedAccessException($"フォルダの作成権限がありません");
             var folderPathString = System.IO.Path.Combine(path.Value, name);
             var folderPath = new LocalDirectoryPath(folderPathString);
-            ValidateAccess(folderPath, FileSystemAccessLevel.All, FileSystemAccessLevel.CreateOnly);//フォルダが存在するなら何もしないので権限に制限はかけない
+            var depth = 0;
+            if (BasePath!.GetDepth(folderPath) is int d) depth = d;
+            else throw new UnauthorizedAccessException($"{path}に対する作成権限が無い");
+            if (!Permission!.ItemCreateScope.Include(depth)) throw new UnauthorizedAccessException($"{path}に対する作成権限が無い");
+
             if (!Directory.Exists(folderPath.Value)) Directory.CreateDirectory(folderPath.Value);
-            if (folderPath is DirectoryT f) return f;
+            if (folderPath is DirectoryT f) return Task.FromResult(f);
             else throw new TypeAccessException($"在り得ないはずの型キャスト{folderPath}");
         }
         //scope==SelfOnlyなら、空フォルダの時のみ削除。そうでなければ例外。
         //SelfAndChildrenなら、中身が削除権限のあるファイルと空フォルダのみであればすべて削除。そうでなければ一切削除せずに例外。
         //AllWithSelfなら、配下のファイル・フォルダ全てに削除権限があればすべて削除。そうでなければ一切削除せずに例外。
-        public override void DeleteDirectory<DirectoryT>(DirectoryT path, PermissionScope scope = PermissionScope.SelfOnly){
-            ValidateAccess(path, FileSystemAccessLevel.DeleteOnly, FileSystemAccessLevel.All);//フォルダが存在しないなら何もしないので権限に制限はかけない
-            if (!Directory.Exists(path.Value)) return;
+        public override Task DeleteDirectoryAsync<DirectoryT>(DirectoryT path, PermissionScope? scope = null, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanDelete) throw new UnauthorizedAccessException($"{this}は削除権限を持たない");
+            if (!Permission!.FileType.HasFlag(FileSystemType.Directory)) throw new UnauthorizedAccessException($"フォルダの削除権限がありません");
+            int depth;
+            if (BasePath!.GetDepth(path) is int d) depth = d;
+            else throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!Permission!.FileAccessScope.Include(depth)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!Directory.Exists(path.Value)) return Task.CompletedTask;//存在しないなら何もせずに終了
 
+            //この時点で、pathにフォルダは存在するし、そのフォルダ自体の削除権限はある。
+
+            var deleteScope = scope == null ? Permission.FileAccessScope.Rebased(depth) : Permission.FileAccessScope.Rebased(depth).Trim(scope.Value);
             var di = new DirectoryInfo(path.Value);
             // SelfOnly の場合、中身があったら即例外、中身が無ければ削除して終了
-            if (scope == PermissionScope.SelfOnly){
+            if (deleteScope == PermissionScope.SelfOnly){
                 if (di.GetFileSystemInfos().Length > 0){
                     throw new IOException($"ディレクトリが空ではないため削除できません: {path.Value}");
                 }else{
                     di.Delete();
-                    return;
+                    return Task.CompletedTask;
                 }
             }
 
-            SearchOption searchOption = scope switch{
-                PermissionScope.SelfAndChildren => SearchOption.TopDirectoryOnly,
-                PermissionScope.AllWithSelf => SearchOption.AllDirectories,
-                _ => throw new ArgumentException($"不適切な権限指定{scope}")
-            };
+            System.IO.SearchOption searchOption = 
+                PermissionScope.SelfAndChildren.Include(deleteScope) ?
+                System.IO.SearchOption.TopDirectoryOnly :
+                System.IO.SearchOption.AllDirectories;
+
+            LocalDirectoryPath targetPath;
+            if(path is LocalDirectoryPath p) targetPath = p;
+            else throw new TypeAccessException($"在り得ないはずの型キャスト{path}");
+            //targetPathを起点としたdeleteScopeの範囲のファイルが全てPermission.FileTypeの範疇であるなら、削除できる。
+            //そうでなければ例外。
 
             // 2. 権限の事前チェック（ドライラン）
             // 配下の全アイテムに対して削除権限があるか確認
             var allItems = di.GetFileSystemInfos("*", searchOption);
             foreach (var item in allItems){
-                var itemInfo = item is FileInfo fi ? DriveItemInfo.From(fi) : DriveItemInfo.From((DirectoryInfo)item);
-                if (!Permission!.IsItemAllowed(itemInfo)){
+                if (item is not FileInfo fi) continue;
+                if (targetPath.GetDepth(fi) is not int feDepth ||
+                    !deleteScope.Include(feDepth) ||
+                    !fi.Extension.FromExtension().InFlag(Permission.FileType)
+                    ){
                     throw new UnauthorizedAccessException($"配下アイテムの削除権限がありません: {item.FullName}");
                 }
             }
@@ -362,41 +479,71 @@ namespace Crast.Accesser.DriveAccesser{
             // Localなら Directory.Delete(path, true) でも良いが、
             // 「権限があるものだけ確実に」なら自前で再帰したほうが安全
             di.Delete(true);
+            return Task.CompletedTask;
         }
 
         //削除権限のあるファイルを全て削除する。空フォルダ含めフォルダは削除しない。
-        public override void ClearDirectory<DirectoryT>(DirectoryT path, FileSystemType fileType = FileSystemType.All, bool recursive = false){
-            ValidateAccess(path, FileSystemAccessLevel.DeleteOnly, FileSystemAccessLevel.All); 
+        public override async Task ClearDirectoryAsync<DirectoryT>(DirectoryT path, FileSystemType fileType = FileSystemType.All, PermissionScope? scope = null, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanDelete) throw new UnauthorizedAccessException($"{this}は削除権限を持たない");
+            var targetType = Permission!.FileType & fileType;
+            if (targetType == FileSystemType.None) throw new UnauthorizedAccessException($"{fileType}の削除権限が一切ありません");
+            int depth;
+            if (BasePath!.GetDepth(path) is int d) depth = d;
+            else throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!Permission!.FileAccessScope.Include(depth + 1)) throw new UnauthorizedAccessException($"{path}の配下に対するアクセス権限が無い");
+            if (!Directory.Exists(path.Value)) throw new ArgumentException($"{path}にフォルダが存在しない");
 
+            var deleteScope = scope == null ? Permission.FileAccessScope.Rebased(depth) : Permission.FileAccessScope.Rebased(depth).Trim(scope.Value);
+            if (deleteScope == PermissionScope.Empty) throw new UnauthorizedAccessException($"{path}の配下に対するアクセス権限が無い");
             var di = new DirectoryInfo(path.Value);
-            if (!di.Exists) return;
 
-            var searchOption = recursive ? SearchOption.AllDirectories : SearchOption.TopDirectoryOnly;
+            System.IO.SearchOption searchOption =
+                PermissionScope.SelfAndChildren.Include(deleteScope) ?
+                System.IO.SearchOption.TopDirectoryOnly :
+                System.IO.SearchOption.AllDirectories;
+            LocalDirectoryPath targetPath;
+            if (path is LocalDirectoryPath p) targetPath = p;
+            else throw new TypeAccessException($"在り得ないはずの型キャスト{path}");
+
+            //targetPathを起点としたdeleteScopeの範囲のtargetTypeの範疇であるファイルを全て削除する。
+
             // ファイルだけを抽出
             var files = di.GetFiles("*", searchOption);
 
             foreach (var file in files){
-                var info = DriveItemInfo.From(file);
-                if (info.FileType.InFlag(fileType) && Permission!.IsItemAllowed(info)) file.Delete();
+                if (targetPath.GetDepth(file) is int feDepth &&
+                    deleteScope.Include(feDepth) &&
+                    file.Extension.FromExtension().InFlag(targetType)
+                    ){
+                    file.Delete();
+                }
             }
         }
 
-        protected override async Task<Stream> OpenReadStreamAsync<FileT>(FileT path){
-            ValidateAccess(path, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
+        protected override async Task<Stream> OpenReadStreamAsync<FileT>(FileT path, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanRead) throw new UnauthorizedAccessException($"{this}は読取権限を持たない");
+            if (!System.IO.Path.GetExtension(path.Value).FromExtension().InFlag(Permission!.FileType)) throw new UnauthorizedAccessException($"{path}の拡張子に対するアクセス権限が無い");
+            if (BasePath!.GetDepth(path) is not int d || !Permission!.FileAccessScope.Include(d)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!ItemExists(path)) throw new ArgumentException($"{path}にファイルが存在しない");
+
             return new FileStream(path.Value, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, true);
         }
 
-        public override async Task SaveStreamAsync<FileT>(FileT path, Stream stream){
-            ValidateAccess(path, FileSystemAccessLevel.WriteOnly, FileSystemAccessLevel.None);
+        public override async Task SaveStreamAsync<FileT>(FileT path, Stream stream, AccesserOption option = default){
+            CheckEmpty();
+            if (!CanWrite) throw new UnauthorizedAccessException($"{this}は書込権限を持たない");
+            if (!System.IO.Path.GetExtension(path.Value).FromExtension().InFlag(Permission!.FileType)) throw new UnauthorizedAccessException($"{path}の拡張子に対するアクセス権限が無い");
+            if (BasePath!.GetDepth(path) is not int d || !Permission!.FileAccessScope.Include(d)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
+            if (!ItemExists(path) && !CanCreate) throw new UnauthorizedAccessException($"{path}の作成権限が無い");
+
             using var fs = new FileStream(path.Value, FileMode.Create, FileAccess.Write, FileShare.None, 4096, true);
             await stream.CopyToAsync(fs);
         }
 
-        public override async Task TransferToAsync<T0, T1, FileT>(FileT readPath, SingleDriveAccesserGeneric<T0> target, T1 targetPath){
-            // 自身からの読み取りが可能かチェック
-            ValidateAccess(readPath, FileSystemAccessLevel.ReadOnly, FileSystemAccessLevel.None);
+        public override async Task TransferToAsync<T0, T1, FileT>(FileT readPath, SingleDriveAccesserGeneric<T0> target, T1 targetPath, AccesserOption option = default){
             using var srcStream = await OpenReadStreamAsync(readPath);
-            // 相手側への保存（相手側でも権限チェックが走る）
             await target.SaveStreamAsync(targetPath, srcStream);
         }
     }
