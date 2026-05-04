@@ -351,15 +351,21 @@ namespace Crast.Accesser.DriveAccesser{
     }
     #endregion
 
-    //FileSystemPermission.IncludeItemPath()を管理するために作ったが、GoogleDrive用であって、LocalDriveはフルパス文字列から判別するべき。
-    //その辺込みで修正の必要はある。
+    /// <summary>
+    /// パス解決を担当するクラス。キャッシュログも持つ。
+    /// </summary>
+    /// <remarks>
+    /// Accesserと違って権限に制限されない代わりに、途中経過を外部に出力しない事を前提とする。
+    /// 
+    /// PathBaseDriveの処理が追加された際、共通で受け取るこっちにも追加する必要がある。
+    /// </remarks>
     public static class PermissionScopeReachHistory{
 
         //アクセス検証を行わず即座に弾くパスのリスト。デバッグとかで使うかもしれない。
         private static readonly DriveItemPath[] Forbidden = [];
         
 
-        //キャッシュされた情報置き場。→NodeではなくResultを保持するDictionaryに作り直し。
+        //キャッシュされた情報置き場。
         private static readonly Dictionary<DriveTypeEnum, Dictionary<DriveItemPath, CachedResult>> CachedResults = [];
         //キャッシュの更新。実データを取得した場合。
         public static void UpdateCache(DriveItemPath id, CachedNode data){
@@ -469,6 +475,7 @@ namespace Crast.Accesser.DriveAccesser{
                 throw new ArgumentException($"定義されていないDriveItemPathのサブクラス{path.GetType()}");
             }
         }
+        //この辺は、GoogleDriveAccesser.ItemExistAsync()とかその辺をちゃんと作った後に改修する必要はある。
         public static async ValueTask<bool> Exists(this DriveItemPath path, CacheStrategy? strategy = null) {
             CacheStrategy cs;
             if (strategy == null) cs = CacheStrategy.CACHE_FIRST(TimeSpan.FromMinutes(60));

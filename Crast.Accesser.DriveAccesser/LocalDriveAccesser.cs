@@ -11,8 +11,8 @@ namespace Crast.Accesser.DriveAccesser{
         public override DriveTypeEnum DriveType => DriveTypeEnum.LocalDrive;
         public LocalDrivePath(string path){
             if (string.IsNullOrWhiteSpace(path)) throw new ArgumentException("Path is empty");
-            // ここで絶対パスに強制変換
-            Value = Path.GetFullPath(path);
+            // ここで絶対パスに強制変換。フォルダパスであっても末尾の区切り文字は無しで統一する。
+            Value = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         }
         public string Name => Path.GetFileName(Value);
         public string NameOnly => Path.GetFileNameWithoutExtension(Value);
@@ -38,7 +38,7 @@ namespace Crast.Accesser.DriveAccesser{
         }
     }
     public sealed record LocalFilePath : LocalDrivePath, IFilePath{
-        public static implicit operator LocalFilePath(string path) => new(path);
+        public static implicit operator LocalFilePath(string path) => new(path);//stringからの暗黙変換
         public LocalFilePath(string path) : base(path) { }
         /// <summary>
         /// 拡張メソッドのExists()と違って、LocalDriveであることが確定しているため非同期でない。
@@ -60,7 +60,7 @@ namespace Crast.Accesser.DriveAccesser{
         public FileSystemType FileType => Path.GetExtension(Value).FromExtension();
     }
     public sealed record LocalDirectoryPath : LocalDrivePath, IDirectoryPath{
-        public static implicit operator LocalDirectoryPath(string path) => new(path);
+        public static implicit operator LocalDirectoryPath(string path) => new(path);//stringからの暗黙変換
         public LocalDirectoryPath(string path) : base(path) { }
         /// <summary>
         /// 拡張メソッドのExists()と違って、LocalDriveであることが確定しているため非同期でない。
@@ -106,7 +106,7 @@ namespace Crast.Accesser.DriveAccesser{
         {
             if(Permission?.Path is LocalDrivePath ldp) BasePath = ldp;
         }
-        protected new LocalDrivePath? BasePath = null;
+        private readonly new LocalDrivePath? BasePath = null;
 
         //処理がちゃんと通ったら、整備性のために共通処理をまとめる。それまでは放置
         protected override async ValueTask ValidateAccess(LocalDrivePath path, FileSystemAccessLevel requiredIfExist, FileSystemAccessLevel requiredIfNotExist){
@@ -233,8 +233,8 @@ namespace Crast.Accesser.DriveAccesser{
         }
         public bool ItemExists(LocalDrivePath path, AccesserOption option = default){
             return path switch{
-                LocalFilePath => File.Exists(Path!.Value),
-                LocalDirectoryPath => Directory.Exists(Path!.Value),
+                LocalFilePath => File.Exists(path!.Value),
+                LocalDirectoryPath => Directory.Exists(path!.Value),
                 _ => throw new ArgumentException($"未定義のパス型{path}")
             };
         }
@@ -412,18 +412,24 @@ namespace Crast.Accesser.DriveAccesser{
         public override Task<DirectoryT> CreateDirectoryAsync<DirectoryT>(DirectoryT path, string name, bool canWrite = false, AccesserOption option = default){
             CheckEmpty();
             if (!CanCreate) throw new UnauthorizedAccessException($"{this}は作成権限を持たない");
-            if (!Permission!.FileType.HasFlag(FileSystemType.Directory)) throw new UnauthorizedAccessException($"フォルダの作成権限がありません");
+            if (!Permission!.FileType.HasFlag(FileSystemType.Directory)) throw new UnauthorizedAccessException($"{this}にフォルダの作成権限がありません");
+
             var folderPathString = System.IO.Path.Combine(path.Value, name);
             var folderPath = new LocalDirectoryPath(folderPathString);
-            var depth = 0;
-            if (BasePath!.GetDepth(folderPath) is int d) depth = d;
-            else throw new UnauthorizedAccessException($"{path}に対する作成権限が無い");
-            if (!Permission!.ItemCreateScope.Include(depth)) throw new UnauthorizedAccessException($"{path}に対する作成権限が無い");
-
-            if (!Directory.Exists(folderPath.Value)) Directory.CreateDirectory(folderPath.Value);
+            CreateDirectory(folderPath);
             if (folderPath is DirectoryT f) return Task.FromResult(f);
             else throw new TypeAccessException($"在り得ないはずの型キャスト{folderPath}");
         }
+        private void CreateDirectory(LocalDirectoryPath path) {
+            if (BasePath!.GetDepth(path) is not int depth) throw new UnauthorizedAccessException($"{this}の範囲外に対する操作");
+            if (!Permission!.InformationScope.Include(depth)) throw new UnauthorizedAccessException($"{this}の範囲外に対する操作");
+            if (!Permission!.ItemCreateScope.Include(depth)) throw new UnauthorizedAccessException($"{path}に対する作成権限が無い");
+            var parentPath = path.Parents().FirstOrDefault() ?? throw new UnauthorizedAccessException($"{this}の範囲外に対する操作");
+            
+            if (!parentPath.Exists()) CreateDirectory(parentPath);
+            Directory.CreateDirectory(path.Value);//既に存在しても正常終了する。
+        }
+
         //scope==SelfOnlyなら、空フォルダの時のみ削除。そうでなければ例外。
         //SelfAndChildrenなら、中身が削除権限のあるファイルと空フォルダのみであればすべて削除。そうでなければ一切削除せずに例外。
         //AllWithSelfなら、配下のファイル・フォルダ全てに削除権限があればすべて削除。そうでなければ一切削除せずに例外。

@@ -25,20 +25,27 @@ GoogleDriveであれば、ドライブアイテムのIDを表す文字列をvalu
 
 *その他も引数・プロパティとして文字列型は使わず、enumやrecordの利用を徹底している。
 
-・アクセス権限→個別権限のFileSystemPermissionと、複合権限のFileSystemPermissionBundle
-FileSystemPermissionBundle._rootに記述されているFileSystemPermission群の外にあるアクセスは全てエラーを返す。
 
-・ストレージへのアクセスメソッド
-個別権限のFileSystemPermissionに対応する、IDriveAccesserとその派生クラス。
-複合権限のFileSystemPermissionBundleに対応する、DriveManager二種。
-DriveManagerは、IDriveAccesserを隠蔽する公開パーツになる。機能分化に伴って、sealedに変更。
-SolidDriveManagerは、コンストラクタで生成したIDriveAccesserを扱う。
-TraficDriveManagerは、メソッドの内部で使い捨てのIDriveAccesserを生成して扱う。
+・アクセス権限→個別権限のFileSystemPermissionと、複合権限のFileSystemPermissionBundle
+FileSystemPermissionBundle._rootに記述されているFileSystemPermission群の外にあるアクセスが発生しないようにする。
+
+
+・ストレージへのアクセスの実装階層
+
+ファイルアクセスstreamを隠蔽して抽象化する、個別権限に対応するIDriveAccesserとその派生クラス。
+基底：IDriveAccesser
+抽象：SingleDriveAccesserGeneric
+具象：LocalDriveAccesser
+具象：GoogleDriveAccesser
+
+Accesserを隠蔽して抽象化する、外部公開用のManagerが2種類。
+規定の権限に対応するAccesserを扱うSolidDriveManager
+複合権限に対応し、メソッド内部で使い捨てのAccesserを生成するTraficDriveManager
 
 
 
 3,想定される利用法
-ソリューション外のストレージへアクセスする必要がある場合に、DriveAccesserをクローンし、
+ソリューション外のストレージへアクセスする必要がある場合に、DriveAccesserプロジェクトをクローンし、
 そのソリューションにおいて必要なアクセス権限を記述する。
 
 その上で、ファイルアクセスを行う外部ユニットはDriveManager二種をマウントして個々の操作を行う。
@@ -47,54 +54,27 @@ TraficDriveManagerは、メソッドの内部で使い捨てのIDriveAccesserを
 4,データの流れと構造
 
 ・パス文字列/DriveItemPath
-機能:
-文字列からの生成
-親ディレクトリのDriveItemPathの取得
-そのパスの存在確認
-利用箇所：
-DriveItemInfoのプロパティ
-FileSystemPermissionのプロパティ
-実際のアクセスを行うメソッドの引数
+
+
+・メタデータキャッシュ/PermissionScopeReachHistory
+DriveItemPathに対する、Exists()とParents()を拡張メソッドとして提供する。
+
+・キャッシュされるメタデータ/ChachedResult
+取得したメタデータであるChachedNodeと、ChachedErrorとを保持するレコード。
 
 ・ファイル情報/DriveItemInfo
-プロパティ：
-DriveTypeEnum DriveType
-DriveItemPath Path
-string Name
-FileSystemType FileType //拡張子やMIMEタイプなどに対応するenum
-bool IsDirectory
-long? Size = null
-DateTime? LastModified = null
-GoogleDriveMetadata? Metadata = null // GoogleDrive の時だけセットされる
-機能：
-System.IO.FileInfoからの生成
-System.IO.DirectoryInfoからの生成
-GoogleDriveMetadataからの生成
-利用箇所：
 情報確認用メソッドの返り値
 
-・グーグルドライブのメタデータ/GoogleDriveMetadata及びGoogleDriveMetaDataBank
-グーグルAPIの消費を減らすために、GoogleDriveのアイテムの情報をキャッシュするためのクラス。
-プロパティ：
-GoogleDrivePath Id,
-string Name,
-FileSystemType Type,
-long? Size,
-GoogleDrivePath? ParentId = null,
-string? ETag = null
-機能：
-拡張メソッドにより、GoogleItemPath.InBank()でキャッシュ済みかの確認と、
-GoogleItemPath.FromBank()でGoogleDriveMetadataへの変換が可能。
-利用箇所：
-DriveItemInfoのプロパティ
-GoogleItemPath.Parent及びGoogleItemPath.existsに使用
+・権限範囲/PermissionScope
+スライス風に、起点パスから下方向の範囲を指定する。0以上のみ。
 
 ・個別権限型/FileSystemPermission
 プロパティ：
 DriveTypeEnum DriveType //LocalDrive、GoogleDriveなどのドライブ種を表すenum
 DriveItemPath Path
-PermissionScope FileAccessScope　//自身、子ファイル、孫以降ファイルの3種のFlagEnum
-PermissionScope InformationScope　//自身、子ファイル、孫以降ファイルの3種のFlagEnum
+PermissionScope InformationScope　//情報取得範囲
+PermissionScope ItemCreateScope　//作成権限範囲
+PermissionScope FileAccessScope　//その他アクセス権限範囲
 FileSystemAccessLevel AccessLevel //Read、Append、Create、Delete、Writeの5種のFlagEnum。メタデータ読み取りは無権限で可能とする。
 FileSystemType FileType //拡張子やMIMEタイプなどに対応するenum
 機能：
@@ -107,8 +87,8 @@ FileSystemPermissionBundle._rootに記述される個別権限の型
 
 ・複合権限型/FileSystemPermissionBundle
 フィールド：
-原版として使う静的フィールドである_root
-実際の権限を保持するインスタンスフィールドである_permissions
+static FileSystemPermission[] _root　権限原版。ここに書かれていない範囲へのアクセスは全て弾く。
+FileSystemPermission[] _permissions　個々のインスタンスが保持する権限。
 機能：
 空権限かどうか
 単独権限かどうか
@@ -116,117 +96,38 @@ FileSystemPermissionBundle._rootに記述される個別権限の型
 他の個別権限もしくは複合権限を含むかどうかの確認
 一部の個別権限を取り出した複合権限を返すGetPart()
 個々の個別権限を小さく変更し、空権限を除いた複合権限を返すNarrow()
-AccessLevel以外全て同じ個別権限を統合するMergeAccessLevel()
-利用箇所：
-IDriveAccesser及びUseDriveAccesserの生成
+個別権限を統合するMergeAccessLevel()とMergeFileType()
 
 ・個々のアクセスメソッド/IDriveAccesserとその派生クラス
-機能：
 実際のストレージへのアクセス各種
-利用箇所：
-GoogleItemPath.Existsの内部処理
-GoogleItemPath.Parentの内部処理
 
 ・固定パスへのアクセス/SolidDriveManager
 ・不特定パスへのアクセス/TraficDriveManager
-機能：
 IDriveAccesserと同様のメソッドを提供する。
 SolidDriveManagerは、内部で保持するIDriveAccesserの名前を追加の引数に。
-TraficDriveManagerは、使い捨てAccesserのPathを追加の引数に。
-利用箇所：
-外部で使用する前提。
 
 
 
-ex1,改善待機
+ex1,改善待機：今のところ優先的に手を付けるつもりはない領域
 AccessGoogleDriveファイル上のあれこれは、DriveAccesserを前提とした構造を作り始める前のコードであるため、DriveAccesserとの整合性が無いのは当然とする。
 GoogleDriveAccesserは現状何の実装もなされていない。
 GoogleDriveAccesserを作り始める前に、既存部分の修正と、GoogleDriveを扱うために必要なクラスが十分かの確認を行う必要がある。
 
+zip等の内部構造を持ったファイルを扱うためのシステムは、外部に分ける。
+そのために、LocalDrivePathにおいて、仮想構造を含むパスを弾く必要もあるが、実装は先に回している。
 
-ex2,改善予定
+
+
+
+ex2,改善予定：手が空き次第手を付けたい範囲
 
 FileSystemPermissionBundle._rootにハードコードしている原版を、jsonなどに外部化した方がいいのではないか。
-
-FileSystemPermission.IncludeItemPathはPermissionScopeReachHistoryを利用しているが、LocalDriveの場合は絶対パスの文字列の比較で済むため、処理を分けるべき。
 
 適当に配置したエラー型は適切か否か。
 
 
-ex3,指摘された改善点
+ex3,指摘された改善点：優先度未確定の範囲
 
-下部構造を持つファイルタイプをFileSystemTypeに追加するべきかどうか。
-仮想構造部分については無視した方が挙動の共通化としては良さげ。
-
-1. コンテナ型ファイルの主な分類
-FileSystemType に追加すべき、あるいはグループ化の対象となる主な種別は以下の通りです。
-
-A. アーカイブ系（圧縮・非圧縮）
-最も一般的な「中身が見える」ファイルです。
-汎用: Zip, 7z, Rar, Tar, Gz
-ディスクイメージ: Iso, Img, Vhd, Vhdx
-パッケージ: Apk (Android), Ipa (iOS), Appx (Windows)
-
-B. ドキュメント・バンドル系
-実態はZIPですが、ユーザーには一つのファイルに見えるものです。
-Office系: Docx, Xlsx, Pptx
-電子書籍: Epub
-アセット: UnityWebBundle, Pck (Godot), AssetBundle
-
-C. データベース・構造化データ系
-ファイルシステムとして見せるにはマウント処理が必要なタイプです。
-DB: Sqlite, Hdf5
-音源: Sf2 (SoundFont), Sfz
-
-仮想構造部分に侵入しないようにするためには、LocalDrivePathのコンストラクタで仮想構造を表すパスを検出する必要がある。
-
-1. 物理パスの「終端境界（Boundary）」ルール物理的なファイルシステムにおいて、パスが「仮想構造」に踏み込んでいるかどうかを判定する基本原則は以下の通りです。
-「中間ファイル」の禁止:
-パスの途中のセグメント（ディレクトリ区切りで分けた要素）の中に、「ファイルとして定義された拡張子」を持つものが含まれており、
-かつその後に続きがある場合、それは仮想パスです。
-C:/Data/Project/ → OK（全てディレクトリの可能性がある）
-C:/Data/Project/Archive.zip → OK（最後がファイルなのは物理パスとして正常）
-C:/Data/Project/Archive.zip/Inner/File.txt → NG（.zip というファイル属性の後に続きがある）
-
-2. 検出アルゴリズム：
-拡張子ベースの静的解析コンストラクタで「ディスクI/O」を行わずに判定する場合、FileSystemTypeManager が持っている拡張子リストを利用した解析が現実的です。
-パス文字列をセグメント（Path.GetFileName の繰り返し、あるいは Split）に分解する。
-最後以外のセグメントの中に、FileSystemTypeManager で「ファイル（非Directory）」として登録されている拡張子（.zip, .7z, .docx 等）を持つものがないかチェックする。
-存在すれば、それは LocalDrivePath ではなく VfsPath の管轄であるとして例外を投げる。
-
-3. パスの名前ルールと区切り文字（デリミタ）の慣習
-一般的に、仮想構造を扱うシステムでは「どこまでが物理か」を明示するために特殊な命名規則や区切り文字を採用することが多いです。
-これらを「弾く対象」として定義しておくのも手です。
-パターン例意味感嘆符 (Bang) 区切りC:/a.zip!/inner/fileJavaや一部のVFSで使われる「ここから仮想」の合図。
-ダブルスラッシュC:/a.zip//inner/fileUNIX系ツールで見られる、マウントポイントの明示。
-拡張子直後の継続C:/a.zip/inner/file最も厄介なパターン。 静的解析が必要。
-
-4. 実装における課題：
-フォルダ名に「.zip」がある場合OSのルール上、「Test.zip」という名前のフォルダを作ることは可能です。
-静的な文字列解析だけでこれを弾いてしまうと、有効な物理ディレクトリにアクセスできなくなるという副作用があります。
-これを回避するための「責任の取り方」の選択肢は2つです。
-A. 保守的（静的）アプローチ:
-「当ライブラリにおいて、コンテナ系拡張子を含む名前のフォルダは物理パスとして認めない（仮想パスとみなす）」と仕様で割り切る。
-B. 厳格（動的）アプローチ:
-コンストラクタでは基本構造（不正文字など）のみチェックし、
-実際に Accesser が利用される際の Exists 確認時、または DiscoveryAuthority の検証時に
-「実は途中でファイルだった」ことが判明した時点でエラーを出す。
-
-まとめ：
-LocalDrivePath コンストラクタでの判定ロジック案ライブラリの安定性を優先するなら、
-以下のようなチェックを LocalDrivePath のコンストラクタに入れるのが良いでしょう。
-
-C#// 簡易イメージ
-var segments = normalizedPath.Split('/', StringSplitOptions.RemoveEmptyEntries);
-for (int i = 0; i < segments.Length - 1; i++) // 最後の要素（ファイル名そのもの）は除外
-{
-    var ext = Path.GetExtension(segments[i]);
-    if (!string.IsNullOrEmpty(ext) && FileSystemTypeManager.IsContainerExtension(ext))
-    {
-        throw new ArgumentException("物理パスの途中にコンテナ拡張子が含まれています。仮想パスの可能性があります。");
-    }
-}
-[!IMPORTANT]「ドットで始まる隠しフォルダ（.git 等）」 は拡張子ではないので、Path.GetExtension の結果が空でないこと、かつファイル名自体がドットのみでないこと、といった細かいケアが必要になります。
 
 
 
