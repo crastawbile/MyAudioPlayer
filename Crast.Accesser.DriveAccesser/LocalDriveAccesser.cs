@@ -21,8 +21,7 @@ namespace Crast.Accesser.DriveAccesser{
         /// 拡張メソッドのParents()と違って、LocalDriveであることが確定しているため非同期でない。
         /// </summary>
         /// <returns></returns>
-        public LocalDirectoryPath[] Parents() => ParentPath() == null ? [] : [(LocalDirectoryPath)ParentPath()!];
-        private string? ParentPath() => Path.GetDirectoryName(Value);
+        public LocalDirectoryPath[] Parents() => Path.GetDirectoryName(Value) is string path ? [path] : [];
         /// <summary>
         /// 拡張メソッドのGetDepthと違って、LocalDriveであることが確定しているため非同期でない。
         /// </summary>
@@ -61,6 +60,7 @@ namespace Crast.Accesser.DriveAccesser{
     }
     public sealed record LocalDirectoryPath : LocalDrivePath, IDirectoryPath{
         public static implicit operator LocalDirectoryPath(string path) => new(path);//stringからの暗黙変換
+        private static readonly char[] Separators = [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar];
         public LocalDirectoryPath(string path) : base(path) { }
         /// <summary>
         /// 拡張メソッドのExists()と違って、LocalDriveであることが確定しているため非同期でない。
@@ -75,25 +75,17 @@ namespace Crast.Accesser.DriveAccesser{
         /// </summary>
         /// <param name="path"></param>
         /// <returns></returns>
-        public new int? GetDepth(LocalDrivePath path) {
-            var count = 0;
-            LocalDrivePath? current = path;
-            while (current != null) {
-                if (current == this) return count;
-                current = current.Parents()[0];
-                count++;
-            }
-            return null;            
-        }
-        public int? GetDepth(FileInfo info) {
-            var count = 0;
-            var current = info.FullName;
-            while (current != null){
-                if (current == Value) return count;
-                current = Path.GetDirectoryName(current);
-                count++;
-            }
-            return null;
+        public new int? GetDepth(LocalDrivePath path) => GetDepth(path.Value);
+        public int? GetDepth(FileInfo info) => GetDepth(info.FullName);
+        //正規化フルパス文字列を相手取る限り、問題なく機能するはず。
+        private int? GetDepth(string path) {
+            if (path.Length < Value.Length) return null;
+            if (!path.StartsWith(Value, StringComparison.OrdinalIgnoreCase)) return null;
+            if (path == Value) return 0;
+            if (!Separators.Contains(path[Value.Length])) return null;//フォルダ名の部分一致を弾くため、直後が区切り文字であることを保証する
+            return path[Value.Length..].
+                Split(Separators, StringSplitOptions.RemoveEmptyEntries).
+                Length;
         }
     }
 
@@ -433,7 +425,7 @@ namespace Crast.Accesser.DriveAccesser{
         //scope==SelfOnlyなら、空フォルダの時のみ削除。そうでなければ例外。
         //SelfAndChildrenなら、中身が削除権限のあるファイルと空フォルダのみであればすべて削除。そうでなければ一切削除せずに例外。
         //AllWithSelfなら、配下のファイル・フォルダ全てに削除権限があればすべて削除。そうでなければ一切削除せずに例外。
-        public override Task DeleteDirectoryAsync<DirectoryT>(DirectoryT path, PermissionScope? scope = null, AccesserOption option = default){
+        public override async Task DeleteDirectoryAsync<DirectoryT>(DirectoryT path, PermissionScope? scope = null, AccesserOption option = default){
             CheckEmpty();
             if (!CanDelete) throw new UnauthorizedAccessException($"{this}は削除権限を持たない");
             if (!Permission!.FileType.HasFlag(FileSystemType.Directory)) throw new UnauthorizedAccessException($"フォルダの削除権限がありません");
@@ -441,7 +433,7 @@ namespace Crast.Accesser.DriveAccesser{
             if (BasePath!.GetDepth(path) is int d) depth = d;
             else throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
             if (!Permission!.FileAccessScope.Include(depth)) throw new UnauthorizedAccessException($"{path}に対するアクセス権限が無い");
-            if (!Directory.Exists(path.Value)) return Task.CompletedTask;//存在しないなら何もせずに終了
+            if (!Directory.Exists(path.Value)) return;//存在しないなら何もせずに終了
 
             //この時点で、pathにフォルダは存在するし、そのフォルダ自体の削除権限はある。
 
@@ -453,7 +445,7 @@ namespace Crast.Accesser.DriveAccesser{
                     throw new IOException($"ディレクトリが空ではないため削除できません: {path.Value}");
                 }else{
                     di.Delete();
-                    return Task.CompletedTask;
+                    return;
                 }
             }
 
@@ -483,8 +475,16 @@ namespace Crast.Accesser.DriveAccesser{
             // 3. 実行（ファイルから消し、最後にディレクトリを消す）
             // Localなら Directory.Delete(path, true) でも良いが、
             // 「権限があるものだけ確実に」なら自前で再帰したほうが安全
-            di.Delete(true);
-            return Task.CompletedTask;
+            for (var i = 0; i < 100; i++) {
+                try{
+                    di.Delete(true);
+                    break;
+                }catch (IOException){
+                    // ディレクトリが空でない場合は、ファイルがロックされている可能性があるため、少し待ってから再試行する
+                    await Task.Delay(50);
+                }
+            }
+            return;
         }
 
         //削除権限のあるファイルを全て削除する。空フォルダ含めフォルダは削除しない。
