@@ -470,12 +470,11 @@ namespace Crast.Accesser.DriveAccesser{
 
             // 2. 権限の事前チェック（ドライラン）
             // 配下の全アイテムに対して削除権限があるか確認
-            var allItems = di.GetFileSystemInfos("*", searchOption);
+            var allItems = di.EnumerateFiles("*", searchOption);
             foreach (var item in allItems){
-                if (item is not FileInfo fi) continue;
-                if (targetPath.GetDepth(fi) is not int feDepth ||
+                if (targetPath.GetDepth(item) is not int feDepth ||
                     !deleteScope.Include(feDepth) ||
-                    !fi.Extension.FromExtension().InFlag(Permission.FileType)
+                    !item.Extension.FromExtension().InFlag(Permission.FileType)
                     ){
                     throw new UnauthorizedAccessException($"配下アイテムの削除権限がありません: {item.FullName}");
                 }
@@ -515,7 +514,7 @@ namespace Crast.Accesser.DriveAccesser{
             //targetPathを起点としたdeleteScopeの範囲のtargetTypeの範疇であるファイルを全て削除する。
 
             // ファイルだけを抽出
-            var files = di.GetFiles("*", searchOption);
+            var files = di.EnumerateFiles("*", searchOption);
 
             foreach (var file in files){
                 if (targetPath.GetDepth(file) is int feDepth &&

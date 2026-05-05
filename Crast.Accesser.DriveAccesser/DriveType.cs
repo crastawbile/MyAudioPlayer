@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Concurrent;
 using System.Reflection;
 
 /// <summary>
@@ -243,24 +244,33 @@ namespace Crast.Accesser.DriveAccesser{
         long? Size,
         bool IsTrashed,
         int? Version, //GoogleDriveのファイルのバージョン。ローカルドライブでは常にnull。
-        DateTimeOffset? LastModified,//最終更新日時。ファイル自体の更新日時。
-        DateTimeOffset LastVerified,//最終検証日時。実際に確認してキャッシュを更新したラスト。
-        DateTimeOffset LastChecked//最終参照日時。このキャッシュを利用したラスト。
+        DateTimeOffset? LastModified//最終更新日時。ファイル自体の更新日時。
     );
     public readonly record struct CachedResult{
         public CachedNode? Node { get; init; }
         public CachedError? LogicalError { get; init; }
         public CachedError? SecurityError { get; init; }
         public CachedError? TransientError { get; init; }
-        public CachedResult SetData(CachedNode data) => this with { Node = data, LogicalError = null, SecurityError = null, TransientError = null };
-        public CachedResult SetError(CachedError error) {
+        public DateTimeOffset LastVerified { get; init; }//最終検証日時。実際に確認してキャッシュを更新したラスト。
+        public DateTimeOffset LastChecked { get; init; }//最終参照日時。このキャッシュを利用したラスト。
+
+        public CachedResult RemakeWithData(CachedNode data) => this with {
+            Node = data,
+            LogicalError = null,
+            SecurityError = null,
+            TransientError = null,
+            LastVerified = DateTimeOffset.Now,
+            LastChecked = DateTimeOffset.Now
+        };
+        public CachedResult RemakeWithError(CachedError error) {
             return error.Type switch{
-                CacheableErrorType.Logical => this with { Node = null, LogicalError = error, SecurityError = null, TransientError = null },
-                CacheableErrorType.Security => this with { SecurityError = error, TransientError = null },
-                CacheableErrorType.Transient => this with { TransientError = error },
+                CacheableErrorType.Logical => this with { Node = null, LogicalError = error, SecurityError = null, TransientError = null, LastVerified = DateTimeOffset.Now, LastChecked = DateTimeOffset.Now },
+                CacheableErrorType.Security => this with { SecurityError = error, TransientError = null, LastVerified = DateTimeOffset.Now, LastChecked = DateTimeOffset.Now },
+                CacheableErrorType.Transient => this with { TransientError = error, LastVerified = DateTimeOffset.Now, LastChecked = DateTimeOffset.Now },
                 _ => throw new ArgumentException($"定義されていないエラー種別{error.Type}"),
             };
         }
+        public CachedResult RemakeWithCheckedTime() => this with { LastChecked = DateTimeOffset.Now };
     }
 
     public enum CacheableErrorType{
@@ -363,51 +373,63 @@ namespace Crast.Accesser.DriveAccesser{
 
         //アクセス検証を行わず即座に弾くパスのリスト。デバッグとかで使うかもしれない。
         private static readonly DriveItemPath[] Forbidden = [];
-        
 
-        //キャッシュされた情報置き場。
-        private static readonly Dictionary<DriveTypeEnum, Dictionary<DriveItemPath, CachedResult>> CachedResults = [];
+
+        //キャッシュされた情報置き場。非同期書き込みに対応できるConcurrentDictionary型。
+        private static readonly ConcurrentDictionary<DriveTypeEnum, ConcurrentDictionary<DriveItemPath, CachedResult>> CachedResults = new();
         //キャッシュの更新。実データを取得した場合。
         public static void UpdateCache(DriveItemPath id, CachedNode data){
-            if (!CachedResults.TryGetValue(id.DriveType, out var dict)){
-                dict = [];
-                CachedResults[id.DriveType] = dict;
-            }
-            dict[id].SetData(data);
+            // GetOrAddを使うことで、キーが存在しない場合は新しく生成してくれます
+            var dict = CachedResults.GetOrAdd(id.DriveType, _ => new ConcurrentDictionary<DriveItemPath, CachedResult>());
+            dict[id] = dict.TryGetValue(id, out var existing) ? existing.RemakeWithData(data) : new CachedResult().RemakeWithData(data);
         }
         //キャッシュの更新。エラーの場合。
         public static void UpdateCache(DriveItemPath id, CachedError error){
-            if (!CachedResults.TryGetValue(id.DriveType, out var dict)){
-                dict = [];
-                CachedResults[id.DriveType] = dict;
-            }
-            dict[id].SetError(error);
+            var dict = CachedResults.GetOrAdd(id.DriveType, _ => new ConcurrentDictionary<DriveItemPath, CachedResult>());
+            dict[id] = dict.TryGetValue(id, out var existing) ? existing.RemakeWithError(error) : new CachedResult().RemakeWithError(error);
         }
         //最終検証日時に基づくキャッシュの一斉削除。
         public static void ClearCacheByLastVerified(DateTimeOffset threshold) {
             foreach (var dict in CachedResults.Values){
-                var keysToRemove = dict.Where(kvp => kvp.Value.Node != null && kvp.Value.Node.Value.LastVerified < threshold).Select(kvp => kvp.Key).ToArray();
-                foreach (var key in keysToRemove){
-                    dict.Remove(key);
+                // ※ConcurrentDictionary は foreach で回している最中の要素削除が許可されているため、削除処理自体はシンプルになります。
+                foreach (var (key,cache) in dict) {
+                    if(cache.LastVerified < threshold) dict.Remove(key, out _);
                 }
             }
         }
         //最終参照日時に基づくキャッシュの一斉削除。
         public static void ClearCacheByLastChecked(DateTimeOffset threshold) {
             foreach (var dict in CachedResults.Values){
-                var keysToRemove = dict.Where(kvp => kvp.Value.Node != null && kvp.Value.Node.Value.LastChecked < threshold).Select(kvp => kvp.Key).ToArray();
-                foreach (var key in keysToRemove){
-                    dict.Remove(key);
+                foreach (var (key, cache) in dict){
+                    if (cache.LastChecked < threshold) dict.Remove(key, out _);
+                }
+            }
+        }
+
+        //キャッシュを参照して存在すれば最終参照時間を更新して返す基本処理。
+        private static CachedResult? GetCachedResult(this DriveItemPath id){
+            if (CachedResults.TryGetValue(id.DriveType, out var dict) && dict.TryGetValue(id, out var result)){
+                var remaked = result.RemakeWithCheckedTime();
+                dict[id] = remaked;
+                return remaked;
+            } else {
+                return null;
+            }
+        }
+        //指定のDriveTypeのキャッシュをyield returnしつつ、最終参照時間を更新する基本処理。
+        private static IEnumerable<(DriveItemPath Id, CachedResult Result)> GenerateCachedResults(DriveTypeEnum driveType){
+            if (CachedResults.TryGetValue(driveType, out var dict)){
+                foreach (var (id, result) in dict){
+                    var remaked = result.RemakeWithCheckedTime();
+                    dict[id] = remaked;
+                    yield return (id, remaked);
                 }
             }
         }
 
         private static bool TryGetParentIds(this DriveItemPath id, out DriveItemPath[] parentIds){
             parentIds = [];
-            if (CachedResults.TryGetValue(id.DriveType, out var dict) &&
-                dict.TryGetValue(id, out var result) &&
-                result.Node is CachedNode node
-                ){
+            if (id.GetCachedResult() is CachedResult result && result.Node is CachedNode node){
                 foreach (var parent in node.ParentIds) {
                     if (parent != id) parentIds = parentIds.Append(parent).ToArray();
                 }
@@ -418,26 +440,19 @@ namespace Crast.Accesser.DriveAccesser{
         }
         private static bool TryGetChildIds(this DriveItemPath parentId, out DriveItemPath[] childIds){
             childIds = [];
-            if (CachedResults.TryGetValue(parentId.DriveType, out var dict)){
-                foreach (var kvp in dict){
-                    var id = kvp.Key;
-                    var result = kvp.Value;
-                    if (result.Node is CachedNode node && node.ParentIds.Contains(parentId)){
-                        childIds = childIds.Append(id).ToArray();
-                    }
+            foreach (var (id,result) in GenerateCachedResults(parentId.DriveType)){
+                if (result.Node is CachedNode node && node.ParentIds.Contains(parentId)){
+                    childIds = childIds.Append(id).ToArray();
                 }
-                if (childIds.Length > 0) return true;
-                else return false;
             }
-            return false;
+            if (childIds.Length > 0) return true;
+            else return false;
         }
         public static DriveItemPath[] GetCachedNodeIds(DriveTypeEnum driveType) =>
             CachedResults.TryGetValue(driveType, out var dict) ? dict.Keys.ToArray() : [];
 
         public static DriveItemPath[] GetCachedNodeParentIds(this DriveItemPath id) => id.TryGetParentIds(out var parentIds) ? parentIds : [];
         public static DriveItemPath[] GetCachedNodeChildIds(this DriveItemPath parentId) => parentId.TryGetChildIds(out var childIds) ? childIds : [];
-        public static CachedResult? GetCachedResult(this DriveItemPath id) => 
-            CachedResults.TryGetValue(id.DriveType, out var dict) && dict.TryGetValue(id, out var result) ? result : null;
         public static CachedResult?[] GetParentCachedResult(this DriveItemPath id) =>
             id.TryGetParentIds(out var parentIds) ? parentIds.Select(pid => pid.GetCachedResult()).ToArray() : [];
         public static CachedResult?[] GetChildCachedResult(this DriveItemPath parentId) => 
@@ -522,13 +537,13 @@ namespace Crast.Accesser.DriveAccesser{
         /// <param name="depth"></param>
         /// <returns></returns>
         public static async ValueTask<int?> GetDepth(this DriveItemPath parent, DriveItemPath child) {
-            if (parent.DriveType != child.DriveType) {return null; }
+            if (parent.DriveType != child.DriveType) return null;
             if (parent == null || child == null) return null;
             if (parent == child) return 0;
 
-            var current = await child.Parents();
+            DriveItemPath[] current = [child];
             DriveItemPath[] next = [];
-            int depth = 1;
+            int depth = 0;
             while (current != null) {
                 foreach (var temp in current) {
                     foreach (var id in await temp.Parents()) {

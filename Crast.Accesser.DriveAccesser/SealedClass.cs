@@ -53,7 +53,7 @@ namespace Crast.Accesser.DriveAccesser{
         private int Start { get; init; }
         private int End { get; init; }
         public bool IsEmpty => Start >= int.MaxValue - 1;
-        public bool Include(int depth) => !IsEmpty && Start <= depth && depth <= End;
+        public bool Include(int depth) => !IsEmpty && Start <= depth && depth < End;
         public bool Include(PermissionScope other) => !IsEmpty && !other.IsEmpty && Start <= other.Start && other.End <= End;
         public PermissionScope(int start, int end){
             if (start < 0) throw new ArgumentException($"PermissionScopeの開始深さは0以上でなければならない。{start}");
