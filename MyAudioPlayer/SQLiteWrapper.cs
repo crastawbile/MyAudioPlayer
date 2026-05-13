@@ -15,19 +15,19 @@ public enum ComparisonOperatorEnum{
     Like,
     NotLike
 }
-public struct ComparisonOperator{
+public readonly struct ComparisonOperator{
     public ComparisonOperatorEnum Operator { get; init; }
     public ComparisonOperator(ComparisonOperatorEnum op){
         Operator = op;
     }
-    static public ComparisonOperator Equal => new ComparisonOperator(ComparisonOperatorEnum.Equal);
-    static public ComparisonOperator NotEqual => new ComparisonOperator(ComparisonOperatorEnum.NotEqual);
-    static public ComparisonOperator GreaterThan => new ComparisonOperator(ComparisonOperatorEnum.GreaterThan);
-    static public ComparisonOperator LessThan => new ComparisonOperator(ComparisonOperatorEnum.LessThan);
-    static public ComparisonOperator GreaterOrEqual => new ComparisonOperator(ComparisonOperatorEnum.GreaterOrEqual);
-    static public ComparisonOperator LessOrEqual => new ComparisonOperator(ComparisonOperatorEnum.LessOrEqual);
-    static public ComparisonOperator Like => new ComparisonOperator(ComparisonOperatorEnum.Like);
-    static public ComparisonOperator NotLike => new ComparisonOperator(ComparisonOperatorEnum.NotLike);
+    static public ComparisonOperator Equal => new(ComparisonOperatorEnum.Equal);
+    static public ComparisonOperator NotEqual => new(ComparisonOperatorEnum.NotEqual);
+    static public ComparisonOperator GreaterThan => new(ComparisonOperatorEnum.GreaterThan);
+    static public ComparisonOperator LessThan => new(ComparisonOperatorEnum.LessThan);
+    static public ComparisonOperator GreaterOrEqual => new(ComparisonOperatorEnum.GreaterOrEqual);
+    static public ComparisonOperator LessOrEqual => new(ComparisonOperatorEnum.LessOrEqual);
+    static public ComparisonOperator Like => new(ComparisonOperatorEnum.Like);
+    static public ComparisonOperator NotLike => new(ComparisonOperatorEnum.NotLike);
 
     public string GetString(){
         return Operator switch{
