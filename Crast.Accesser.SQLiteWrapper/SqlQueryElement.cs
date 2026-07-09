@@ -104,18 +104,18 @@
         private static long IdCount = 0;
         internal static SqlQueryElementId GetNewId() => new(Interlocked.Increment(ref IdCount));
 
-        private ISqlQueryElement _root; // 不変レコードツリーの根本。
+        private SqlQueryElement _root; // 不変レコードツリーの根本。
 
-        public SqlQueryDraft(ISqlQueryElement root){
+        public SqlQueryDraft(SqlQueryElement root){
             _root = root;
         }
 
-        public void Update(SqlQueryPath path, ISqlQueryElement newElement){
+        public void Update(SqlQueryPath path, SqlQueryElement newElement){
             var newClone = CloneNode(newElement);
             while (true){
                 var snapshot = _root;
                 // 新しいツリーを生成（この計算自体はスナップショットに対して行うので安全）
-                if (snapshot.Replace(path, newClone) is not ISqlQueryElement newTree){
+                if (snapshot.Replace(path, newClone) is not SqlQueryElement newTree){
                     throw new InvalidOperationException($"そのパスに該当するノードはこのクエリ内に存在しない");
                 }
 
@@ -132,15 +132,15 @@
         /// </remarks>
         /// <param name="target"></param>
         /// <returns></returns>
-        internal ISqlQueryElement? CloneNode(SqlQueryPath path) => _root.GetElement(path)?.CloneNode(this);
-        internal ISqlQueryElement CloneNode(ISqlQueryElement target) => target.CloneNode(this);
+        internal SqlQueryElement? CloneNode(SqlQueryPath path) => _root.GetElement(path)?.CloneNode(this);
+        internal SqlQueryElement CloneNode(SqlQueryElement target) => target.CloneNode(this);
 
-        public bool Insert(SqlQueryPath path, ISqlQueryElement childTree, SqlQueryPath childPath) {
+        public bool Insert(SqlQueryPath path, SqlQueryElement childTree, SqlQueryPath childPath) {
             while (true){
                 var snapshot = _root;
-                if (snapshot.GetElement(path) is not ISqlQueryElement leaf) return false;
-                if (childTree.Replace(childPath, leaf) is not ISqlQueryElement newChild) return false;
-                if (snapshot.Replace(path, newChild) is not ISqlQueryElement newTree) return false;
+                if (snapshot.GetElement(path) is not SqlQueryElement leaf) return false;
+                if (childTree.Replace(childPath, leaf) is not SqlQueryElement newChild) return false;
+                if (snapshot.Replace(path, newChild) is not SqlQueryElement newTree) return false;
 
                 // 参照をアトミックに差し替え。他スレッドに先を越されていたらやり直し（CAS操作）
                 if (ReferenceEquals(Interlocked.CompareExchange(ref _root, newTree, snapshot), snapshot)) return true;
@@ -152,8 +152,8 @@
             while (true){
                 var snapshot = _root;
                 if (snapshot.GetElement(sharedPath) is null) return false;
-                if (snapshot.GetElement(childPath) is not ISqlQueryElement child) return false;
-                if (snapshot.Replace(sharedPath, child) is not ISqlQueryElement newTree) return false;
+                if (snapshot.GetElement(childPath) is not SqlQueryElement child) return false;
+                if (snapshot.Replace(sharedPath, child) is not SqlQueryElement newTree) return false;
 
                 // 参照をアトミックに差し替え。他スレッドに先を越されていたらやり直し（CAS操作）
                 if (ReferenceEquals(Interlocked.CompareExchange(ref _root, newTree, snapshot), snapshot)) return true;
@@ -165,12 +165,12 @@
     /// <summary>
     /// SQLクエリ文字列に対応するデータクラスの基底。
     /// </summary>
-    public abstract record ISqlQueryElement{
+    public abstract record SqlQueryElement{
         public required SqlQueryElementId Id { get; init; }
         public required bool HasUndefined { get; init; }
         public required SqlType Type { get; init; }
-        public abstract SqlFragment Build(SqlBuildContext context);
-        public abstract SqlFragment DebugBuild(SqlDebugBuildContext context);
+        public abstract SqlQueryFragment Build(SqlBuildContext context);
+        public abstract SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context);
         // 構築前に構造の妥当性をチェックする（例：必須の子要素が不足していないか）
         public virtual void Validate(){
             ValidateSelf();
@@ -178,20 +178,20 @@
         }
         protected abstract void ValidateSelf();
 
-        public abstract ISqlQueryElement? GetChildByRole(SqlQueryElementRole role);
-        public ISqlQueryElement? GetChildById(SqlQueryElementId id){
+        public abstract SqlQueryElement? GetChildByRole(SqlQueryElementRole role);
+        public SqlQueryElement? GetChildById(SqlQueryElementId id){
             foreach (var (_, child) in IterateChildren()){
                 if (child.Id == id) return child;
             }
             return null;
         }
-        public ISqlQueryElement? GetElement(SqlQueryPath path){
+        public SqlQueryElement? GetElement(SqlQueryPath path){
             if (path.Root != Id) return null;
             var childPath = path.RemoveRoot();
 
-            ISqlQueryElement current = this;
+            SqlQueryElement current = this;
             foreach (var id in childPath.Ids){
-                if (current.GetChildById(new SqlQueryElementId(id)) is ISqlQueryElement next){
+                if (current.GetChildById(new SqlQueryElementId(id)) is SqlQueryElement next){
                     current = next;
                 }else{
                     return null;
@@ -199,7 +199,7 @@
             }
             return current;
         }
-        public SqlQueryPath? GetPathByNode(ISqlQueryElement target) {
+        public SqlQueryPath? GetPathByNode(SqlQueryElement target) {
             if (object.ReferenceEquals(this, target)) return new([Id.Value]);
             foreach (var (_, child) in IterateChildren()){
                 if (child.GetPathByNode(target) is SqlQueryPath p) return p.AppendRoot(Id);
@@ -218,17 +218,17 @@
         /// </summary>
         /// <param name="target"></param>
         /// <returns></returns>
-        public bool Has(ISqlQueryElement target){
+        public bool Has(SqlQueryElement target){
             if (object.ReferenceEquals(this, target)) return true;
             foreach (var (_, Element) in IterateChildren()){
                 if (Element.Has(target)) return true;
             }
             return false;
         }
-        public ISqlQueryElement? GetElementById(SqlQueryElementId id){
+        public SqlQueryElement? GetElementById(SqlQueryElementId id){
             if (Id == id) return this;
             foreach (var (_, Element) in IterateChildren()){
-                if (Element.GetElementById(id) is ISqlQueryElement result) return result;
+                if (Element.GetElementById(id) is SqlQueryElement result) return result;
             }
             return null;
         }
@@ -240,15 +240,15 @@
         /// <param name="replacement">置き換える新しい要素。</param>
         /// <param name="result">置き換え後の新しいクエリツリー。</param>
         /// <returns>置き換えが成功したかどうか。</returns>
-        public ISqlQueryElement? Replace(SqlQueryPath path, ISqlQueryElement replacement){
+        public SqlQueryElement? Replace(SqlQueryPath path, SqlQueryElement replacement){
             if (path.Root != Id){return null;}
             var childPath = path.RemoveRoot();
             if (childPath.Length == 0){ return replacement;}
 
             var childId = childPath.Root;
-            if (GetChildById(childId) is ISqlQueryElement nextNode
-                && nextNode.Replace(childPath, replacement) is ISqlQueryElement childResult
-                && ReplaceChild(childId, childResult) is ISqlQueryElement result
+            if (GetChildById(childId) is SqlQueryElement nextNode
+                && nextNode.Replace(childPath, replacement) is SqlQueryElement childResult
+                && ReplaceChild(childId, childResult) is SqlQueryElement result
                 ) {
                 return result;
             } else {
@@ -259,19 +259,19 @@
         /// 直接の子要素を反復処理する為のジェネレータ。
         /// </summary>
         /// <returns></returns>
-        public abstract IEnumerable<(SqlQueryElementRole Role, ISqlQueryElement Element)> IterateChildren();
+        public abstract IEnumerable<(SqlQueryElementRole Role, SqlQueryElement Element)> IterateChildren();
         /// <summary>
         /// 子要素を置き換えた新しいクエリノードを返す。
         /// </summary>
         /// <param name="role">置き換える子要素の役割を識別する文字列。</param>
         /// <param name="newElement">置き換える新しい子要素。</param>
         /// <returns>置き換え後の新しいクエリノード。</returns>
-        internal abstract ISqlQueryElement? ReplaceChild(SqlQueryElementId id, ISqlQueryElement newElement);
-        internal abstract ISqlQueryElement? ReplaceChild(SqlQueryElementRole role, ISqlQueryElement newElement);
-        internal abstract ISqlQueryElement CloneNode(SqlQueryDraft draft);
-        internal abstract ISqlQueryElement AddChildren(SqlQueryElementRoleEnum role, ISqlQueryElement element);
-        internal abstract ISqlQueryElement AddChildren(SqlQueryElementRoleEnum role, ISqlQueryElement[] elements);
-        internal abstract ISqlQueryElement RemoveChildren(SqlQueryElementRoleEnum role, int index, int count = 1);
+        internal abstract SqlQueryElement? ReplaceChild(SqlQueryElementId id, SqlQueryElement newElement);
+        internal abstract SqlQueryElement? ReplaceChild(SqlQueryElementRole role, SqlQueryElement newElement);
+        internal abstract SqlQueryElement CloneNode(SqlQueryDraft draft);
+        internal abstract SqlQueryElement AddChildren(SqlQueryElementRoleEnum role, SqlQueryElement element);
+        internal abstract SqlQueryElement AddChildren(SqlQueryElementRoleEnum role, SqlQueryElement[] elements);
+        internal abstract SqlQueryElement RemoveChildren(SqlQueryElementRoleEnum role, int index, int count = 1);
 
     }
 

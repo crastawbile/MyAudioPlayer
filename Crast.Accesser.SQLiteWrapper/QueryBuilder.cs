@@ -1,9 +1,4 @@
-﻿namespace Crast.Accesser.SqlWrapper
-{
-    public class QueryBuilder
-    {
-
-    }
+﻿namespace Crast.Accesser.SqlWrapper{
     /// <summary>
     /// SQLクエリの種類を表すフラグ列挙型。
     /// </summary>
@@ -23,7 +18,7 @@
     /// <summary>
     /// ISqlQueryStatementから最終的に出力されるSQLクエリ文字列とパラメータのセットを表すレコードクラス。
     /// </summary>
-    public record SqlBuiltQuery(
+    public sealed record SqlBuiltQuery(
         string Sql,
         IReadOnlyDictionary<string, object> Parameters,
         SqlType Type
@@ -31,24 +26,48 @@
     /// <summary>
     /// SqlBuiltQueryを出力する過程で、プレースホルダーを管理するためのクラス。
     /// </summary>
-    public class SqlBuildContext{
+    public sealed class SqlBuildContext{
+        public SqlType Dialect { get; }//SQL方言の出力方針
         private readonly Dictionary<string, object> _parameters = [];
+        private string Prefix { get; }
+        private (char Open, char Close) QuoteChars { get; }
+
+        public SqlBuildContext(SqlType dialect){
+            Dialect = dialect;
+            //方言ごとのプレースホルダープレフィックスとクォート文字を設定
+            if(dialect.HasFlag(SqlType.SQLite)){
+                Prefix = "@p";
+                QuoteChars = ('"', '"');
+            }else if(dialect.HasFlag(SqlType.PostgreSQL)){
+                Prefix = "@p";
+                QuoteChars = ('"', '"');
+            }else{
+                Prefix = "@p";
+                QuoteChars = ('[', ']');
+            }
+        }
 
         // 値を預かり、プレースホルダー名（@p0...）を返す
         public string GetPlaceHolder(object value){
-            string name = $"@p{_parameters.Count}";
+            string name = $"{Prefix}{_parameters.Count}";
             _parameters[name] = value;
             return name;
         }
 
+        //空白文字・改行文字のデフォルト設定に対する置換指定を設定できるようにする必要がある。
+
+
+
         // 最終的な SqlBuiltQuery を生成する
-        public SqlBuiltQuery BuildQuery(SqlFragment sql, SqlType type) => new(sql.Value, _parameters, type);
+        public SqlBuiltQuery BuildQuery(SqlQueryFragment sql) => new(sql.Value, _parameters, Dialect);
     }
     /// <summary>
-    /// ISqlQueryElement.Buildから出力される加工途中の文字列を担当するクラス。
+    /// SqlQueryElement.Buildから出力される加工途中の文字列を担当するクラス。
     /// </summary>
     /// <param name="Value"></param>
-    public readonly record struct SqlFragment(string Value);
+    public readonly record struct SqlBuiltQueryFragment(string Value, int? Precedence = null);//PrecedenceはElementのプロパティで十分かもしれない？
+
+
 
     /// <summary>
     /// ISqlQueryStatementからログ用に出力される文字列を表すレコードクラス。
@@ -62,7 +81,7 @@
     public record BuildNotice(
         NoticeLevel Level, // Info, Warning, Critical
         string Message,
-        ISqlQueryElement Origin // どの要素が発信したか
+        SqlQueryElement Origin // どの要素が発信したか
     );
     public enum NoticeLevel{
         Info,

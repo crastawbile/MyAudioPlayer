@@ -5,17 +5,36 @@ using System.Text;
 namespace Crast.Accesser.SqlWrapper{
 
 
+
     /// <summary>
-    /// 実行可能なSQLクエリ文に対応するデータクラスの基底。
+    /// 空白文字型。子要素を持たない。
     /// </summary>
-    interface ISqlQueryStatement : ISqlQueryElement{
-        // 例えば、SELECT文やINSERT文などのSQLクエリ全体を表すインターフェース。
+    public abstract record SqlQueryTriviaElement : SqlQueryElement { }
+    /// <summary>
+    /// 実文字要素。前後にコメント含む空白文字を持てる。
+    /// </summary>
+    public abstract record SqlQueryStructuralElement : SqlQueryElement{
+        public List<SqlQueryTriviaElement> LeadingTrivia { get; init; } = [];
+        public List<SqlQueryTriviaElement> TrailingTrivia { get; init; } = [];
     }
     /// <summary>
-    /// 単独で実行できないSQLクエリ文の一部に対応するデータクラスの基底。
+    /// 子要素を持たない、分割不可の文字列要素。キーワードや識別子、リテラル値など。
     /// </summary>
-    interface ISqlQueryFragment : ISqlQueryElement{
-    }
+    public abstract record SqlQueryTokenElement : SqlQueryStructuralElement { }
+    /// <summary>
+    /// SQLクエリ構造の一般的な要素。文、句、式など。基本的に子要素を持つ。
+    /// </summary>
+    public abstract record SqlQueryNode : SqlQueryStructuralElement {}
+    /// <summary>
+    /// 実行可能なSQLクエリ構造の基底。
+    /// </summary>
+    public abstract record SqlQueryStatement : SqlQueryNode { }
+    /// <summary>
+    /// 実行不能なSQLクエリ構造の基底。
+    /// </summary>
+    public abstract record SqlQueryFragment : SqlQueryNode { }
+
+
     /// <summary>
     /// SQLクエリの「句」に対応するデータクラスの基底。
     /// </summary>
