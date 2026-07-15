@@ -6,4 +6,8 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\Crast.Utilities.ExtensionMethods\Crast.Utilities.ExtensionMethods.csproj" />
+  </ItemGroup>
+
 </Project>

@@ -9,16 +9,16 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Google.Apis.Drive.v3" Version="1.73.0.4068" />
+    <PackageReference Include="Google.Apis.Drive.v3" Version="1.75.0.4192" />
     <PackageReference Include="MathNet.Numerics" Version="5.0.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.3" />
-    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.3" />
-    <PackageReference Include="NAudio" Version="2.2.1" />
-    <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.9" />
+    <PackageReference Include="Microsoft.Data.Sqlite.Core" Version="10.0.9" />
+    <PackageReference Include="NAudio" Version="2.3.0" />
+    <PackageReference Include="SixLabors.ImageSharp" Version="4.0.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Crast.Accesser.DriveAccesser\Crast.Accesser.DriveAccesser.csproj" />
+    <ProjectReference Include="..\Crast.Accesser.DriveAccesser\Crast.Accessor.DriveAccessor.csproj" />
   </ItemGroup>
 
   <ItemGroup>

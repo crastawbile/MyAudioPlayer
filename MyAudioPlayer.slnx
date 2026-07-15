@@ -1,6 +1,6 @@
 <Solution>
-  <Project Path="Crast.Accesser.DriveAccesser/Crast.Accesser.DriveAccesser.csproj" Id="e6832a94-701b-482e-80b4-a4a94c166e61" />
-  <Project Path="Crast.Accesser.SQLiteWrapper/Crast.Accesser.SqlWrapper.csproj" Id="feb05832-1c30-476b-bbf6-1f400b84724f" />
+  <Project Path="Crast.Accesser.DriveAccesser/Crast.Accessor.DriveAccessor.csproj" Id="e6832a94-701b-482e-80b4-a4a94c166e61" />
+  <Project Path="Crast.Accesser.SQLiteWrapper/Crast.Accessor.SqlWrapper.csproj" Id="feb05832-1c30-476b-bbf6-1f400b84724f" />
   <Project Path="Crast.Utilities.ExtensionMethods/Crast.Utilities.ExtensionMethods.csproj" Id="e169a02c-c8ff-465e-96d4-747e25797af7" />
   <Project Path="MyAudioPlayer/MyAudioPlayer.Outer.csproj" />
 </Solution>
