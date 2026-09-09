@@ -2,9 +2,11 @@
 using System.Collections.Immutable;
 using System.Text;
 using System.Linq;
+using System.Runtime.InteropServices;
 
 
 namespace Crast.Accessor.SqlWrapper{
+    ///各エレメントの具象型及び比較的細かい抽象型をまとめたファイル。
 
 
     #region 抽象型の定義の列挙
@@ -19,9 +21,10 @@ namespace Crast.Accessor.SqlWrapper{
         //子要素を持たないことで処理が確定するメソッドをsealedにして、派生クラスでのオーバーライドを禁止する。
         public sealed override bool HasChild => false;
         public sealed override bool HasChildNode => false;
-        public abstract ModeOfShowingTrivia RequiredMode { get; }
+        public abstract TriviaType TriviaType { get; }
         public sealed override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotField Slot)> IterateChildren() { yield break; }
         internal sealed override SqlQueryElement CloneNode(SqlQueryDraft draft) => this;
+        public abstract override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context);
 
         internal sealed override SqlQueryElement? ReplaceChildByRole(SqlQueryDraft draft, SqlQueryElementRole role, SqlQuerySlotState newNode) => throw new NotSupportedException("空白文字型ノードは子要素を持たない");
         internal sealed override SqlQueryElement AddChildren(SqlQueryElementRole role, SqlQuerySlotState[] newNodes) => throw new NotSupportedException("空白文字型ノードは子要素を持たない");
@@ -41,6 +44,7 @@ namespace Crast.Accessor.SqlWrapper{
             LeadingTrivia = leadingTrivia;
             TrailingTrivia = trailingTrivia;
         }
+        public abstract override SqlBuiltQueryFragmentNode Build(SqlBuildContext context);
     }
     /// <summary>
     /// 実文字子要素を持たない、分割不可の文字列要素。キーワードや識別子、リテラル値など。
@@ -105,9 +109,15 @@ namespace Crast.Accessor.SqlWrapper{
     /// </remarks>
     /// <param name="Count"></param>
     public sealed record SqlQuerySpaceElement(byte Count = 0) : SqlQueryHorizontalWhitespace{
-        public override ModeOfShowingTrivia RequiredMode { get; } = ModeOfShowingTrivia.Space;
-        public override SqlBuiltQueryFragment Build(SqlBuildContext context){
-            return new SqlBuiltQueryFragment(Count == 0 ? context.Options.DefaultSpace : new string(' ', Count));
+        public override TriviaType TriviaType { get; } = TriviaType.Space;
+        public static SqlQuerySpaceElement Create(byte count = 0){
+            return new SqlQuerySpaceElement(count);
+        }
+        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
+            return new SqlBuiltQueryFragmentTrivia(
+                new SqlQueryFragmentConditions(),
+                Count == 0 ? context.Options.DefaultSpace : new string(' ', Count)
+                );
         }
         public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             var valueStr = Count == 0 ? "[スペース:デフォルト]" : $"[スペース:×{Count}]";
@@ -122,9 +132,15 @@ namespace Crast.Accessor.SqlWrapper{
     /// </remarks>
     /// <param name="Count"></param>
     public sealed record SqlQueryTabElement(byte Count = 0) : SqlQueryHorizontalWhitespace{
-        public override ModeOfShowingTrivia RequiredMode { get; } = ModeOfShowingTrivia.Space;
-        public override SqlBuiltQueryFragment Build(SqlBuildContext context){
-            return new SqlBuiltQueryFragment(Count == 0 ? context.Options.DefaultTab : new string('\t', Count));
+        public override TriviaType TriviaType { get; } = TriviaType.Space;
+        public static SqlQueryTabElement Create(byte count = 0){
+            return new SqlQueryTabElement(count);
+        }
+        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
+            return new SqlBuiltQueryFragmentTrivia(
+                new SqlQueryFragmentConditions(),
+                Count == 0 ? context.Options.DefaultTab : new string('\t', Count)
+            );
         }
         public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             var valueStr = Count == 0 ? "[タブ:デフォルト]" : $"[タブ:×{Count}]";
@@ -139,9 +155,18 @@ namespace Crast.Accessor.SqlWrapper{
     /// </remarks>
     /// <param name="Count"></param>
     public sealed record SqlQueryNewlineElement(byte Count = 0) : SqlQueryTriviaElement{
-        public override ModeOfShowingTrivia RequiredMode { get; } = ModeOfShowingTrivia.Newline;
-        public override SqlBuiltQueryFragment Build(SqlBuildContext context){
-            return new SqlBuiltQueryFragment(Count == 0 ? context.Options.DefaultNewline : new string(context.Options.NewlineChar, Count));
+        public override TriviaType TriviaType { get; } = TriviaType.Newline;
+        public static SqlQueryNewlineElement Create(byte count = 0){
+            return new SqlQueryNewlineElement(count);
+        }
+        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
+            return new SqlBuiltQueryFragmentTrivia(
+                new SqlQueryFragmentConditions(
+                    StartWithNewline: RequiredStatus.Satisfied,
+                    EndWithNewline: RequiredStatus.Satisfied
+                    ),
+                Count == 0 ? context.Options.DefaultNewline : new string(context.Options.NewlineChar, Count)
+            );
         }
         public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             var valueStr = Count == 0 ? "[改行:デフォルト]" : $"[改行:×{Count}]";
@@ -157,10 +182,13 @@ namespace Crast.Accessor.SqlWrapper{
     /// 空白文字のうち、ブロックコメントを表す具象クラス。
     /// </summary>
     public sealed record SqlQueryBlockCommentElement : SqlQueryCommentElement{
-        public override ModeOfShowingTrivia RequiredMode { get; } = ModeOfShowingTrivia.Comment;
-        public SqlQueryBlockCommentElement(string value) : base(value){ }
-        public override SqlBuiltQueryFragment Build(SqlBuildContext context){
-            return new SqlBuiltQueryFragment($"/*{Value}*/");
+        public override TriviaType TriviaType { get; } = TriviaType.Comment;
+        private SqlQueryBlockCommentElement(string value) : base(value){ }
+        public static SqlQueryBlockCommentElement Create(string value){
+            return new SqlQueryBlockCommentElement(value);
+        }
+        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
+            return new SqlBuiltQueryFragmentTrivia(new SqlQueryFragmentConditions(), $"/*{Value}*/");
         }
         public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             return new([$"[コメント] : {Value}"]);
@@ -176,10 +204,18 @@ namespace Crast.Accessor.SqlWrapper{
     /// 空白文字のうち、通常の行コメントを表す具象クラス。`--`で始まる形式。
     /// </summary>
     public sealed record SqlQueryDoubleDashCommentElement : SqlQueryLineCommentElement{
-        public override ModeOfShowingTrivia RequiredMode { get; } = ModeOfShowingTrivia.Comment;
+        public override TriviaType TriviaType { get; } = TriviaType.Comment;
         public SqlQueryDoubleDashCommentElement(string value) : base(value) { }
-        public override SqlBuiltQueryFragment Build(SqlBuildContext context){
-            return new SqlBuiltQueryFragment($"--{Value}", NeedNewlineAfter: true);
+        public static SqlQueryDoubleDashCommentElement Create(string value){
+            return new SqlQueryDoubleDashCommentElement(value);
+        }
+        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
+            return new SqlBuiltQueryFragmentTrivia(
+                new SqlQueryFragmentConditions(
+                    EndWithNewline: RequiredStatus.Unsatisfied
+                ),
+                $"--{Value}"
+            );
         }
         public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             return new([$"[行コメント] : {Value}"]);
@@ -190,16 +226,19 @@ namespace Crast.Accessor.SqlWrapper{
     /// </summary>
     public sealed record SqlQueryHashCommentElement : SqlQueryLineCommentElement{
         public override SqlType SafeType { get; } = SqlType.MySQL;//Allでないエレメントでのみ上書きする。
-        public override ModeOfShowingTrivia RequiredMode { get; } = ModeOfShowingTrivia.Comment;
+        public override TriviaType TriviaType { get; } = TriviaType.Comment;
 
         public SqlQueryHashCommentElement(string value) : base(value) { }
-        public override SqlBuiltQueryFragment Build(SqlBuildContext context){
+        public static SqlQueryHashCommentElement Create(string value){
+            return new SqlQueryHashCommentElement(value);
+        }
+        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
             if (context.Dialect.Type.InFlag(SafeType)){
                 //ハッシュコメントをそのまま出力可能な場合
-                return new SqlBuiltQueryFragment($"#{Value}", NeedNewlineAfter: true);
+                return new SqlBuiltQueryFragmentTrivia($"#{Value}", NeedNewlineAfter: true);
             } else {
                 //ハッシュコメント非対応の方言の場合、AlertPolicyに従って処理する
-                switch (context.Options.UnsupportedHashComments){
+                switch (context.Options.InvalidComments){
                     case AlertPolicy.AllowAndConvert:
                         return AdaptTo(context.Dialect.Type).Build(context);
                     case AlertPolicy.AlertAndConvert:
@@ -215,7 +254,7 @@ namespace Crast.Accessor.SqlWrapper{
         public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             string[] fragment = [$"[ハッシュコメント] : {Value}"];
             if (!context.Dialect.Type.InFlag(SafeType)){
-                switch (context.Options.UnsupportedHashComments){
+                switch (context.Options.InvalidComments){
                     case AlertPolicy.AllowAndConvert:
                         //fragment = new[] {$"[行コメント] : {Values}"};
                         break;
@@ -298,7 +337,7 @@ namespace Crast.Accessor.SqlWrapper{
         }
         #endregion
 
-        public override SqlBuiltQueryFragment Build(SqlBuildContext context){
+        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
             StringBuilder sb = new();
             bool needNewLine = false;
             foreach (var trivia in _values){
@@ -319,14 +358,14 @@ namespace Crast.Accessor.SqlWrapper{
                     }
                 }
                 //ShowTrivia : 表示対象外のトリビアは無視する
-                if (!context.Options.ShowTrivia.HasFlag(trivia.State.Element!.RequiredMode)) continue;
+                if (!context.Options.ShowTrivia.HasFlag(trivia.State.Element!.TriviaType)) continue;
 
                 //子要素のビルド結果の回収
                 var fragment = trivia.Build(context);
-                sb.Append(fragment.Value);
+                sb.Append(fragment.Main);
                 needNewLine = fragment.NeedNewlineAfter;
             }
-            return new SqlBuiltQueryFragment(sb.ToString(), NeedNewlineAfter: needNewLine);
+            return new SqlBuiltQueryFragmentTrivia(sb.ToString(), NeedNewlineAfter: needNewLine);
         }
         public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             List<string> outputs = [""];//先頭行は、後から入るIDとRole以外に必要な情報が無いので空文字。
@@ -350,7 +389,7 @@ namespace Crast.Accessor.SqlWrapper{
                     }
                 }
                 //ShowTrivia : 表示対象外のトリビアは無視する
-                if (!context.Options.ShowTrivia.HasFlag(trivia.State.Element!.RequiredMode)) continue;
+                if (!context.Options.ShowTrivia.HasFlag(trivia.State.Element!.TriviaType)) continue;
 
                 //子要素のビルド結果の回収
                 var fragment = trivia.DebugBuild(context);
@@ -462,45 +501,44 @@ namespace Crast.Accessor.SqlWrapper{
 
     #endregion
 
+    //未達成項目：
+    //StructualElementの時点で、Build内で空白文字を接続する処理を定義しておくべき。
+    //それに伴って、いくつかBuildOptionの項目も追加する必要はある。
+    //Triviaと本体とを分けた状態で親に回して、親の方で本体を加工したのちにTriviaを接続する方が良さげ。
+    //定置キーワードの指定や空白文字の必須性など、一段上で処理した方がいい処理は多そう。
+
     #region Token要素の定義
 
     public abstract record SqlQueryKeywordElement : SqlQueryTokenElement{
         public abstract string String { get; }
-    public SqlQueryKeywordElement(SqlQuerySlotField<SqlQueryTriviaList> leadingTrivia, SqlQuerySlotField<SqlQueryTriviaList> trailingTrivia) : base(leadingTrivia, trailingTrivia)
-    {
+        public SqlQueryKeywordElement(SqlQuerySlotField<SqlQueryTriviaList> leadingTrivia, SqlQuerySlotField<SqlQueryTriviaList> trailingTrivia)
+            : base(leadingTrivia, trailingTrivia)
+        {
+        }
     }
-    public override SqlBuiltQueryFragment Build(SqlBuildContext context)
-    {
-        var leading = LeadingTrivia.Build(context);
-        var trailing = TrailingTrivia.Build(context);
-        return new SqlBuiltQueryFragment($"{leading.Value}{String}{trailing.Value}", NeedNewlineAfter: trailing.NeedNewlineAfter);
+    public sealed record SqlQueryFixedKeywordElement : SqlQueryKeywordElement{
+        public override string String { get; }
+        public SqlQueryFixedKeywordElement(SqlQuerySlotField<SqlQueryTriviaList> leadingTrivia, SqlQuerySlotField<SqlQueryTriviaList> trailingTrivia)
+            : base(leadingTrivia, trailingTrivia)
+        {
+        }
+
+
     }
-    public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context)
-    {
-        var leading = LeadingTrivia.DebugBuild(context);
-        var trailing = TrailingTrivia.DebugBuild(context);
-        List<string> outputs = [];
-        outputs.AddRange(leading.Values.Select(line => $"├{line}"));
-        outputs.Add($"├[キーワード] : {String}");
-        outputs.AddRange(trailing.Values.Select(line => $"└{line}"));
-        return new SqlDebugBuiltQuery([.. outputs], NeedNewlineAfter: trailing.NeedNewlineAfter);
-    }
-}
 
 
 
 
-
-        #endregion
-
+    #endregion
 
 
-//ここから下は未整理
 
-/// <summary>
-/// SQLクエリの「句」に対応するデータクラスの基底。
-/// </summary>
-interface ISqlClause : ISqlQueryFragment{
+    //ここから下は未整理
+
+    /// <summary>
+    /// SQLクエリの「句」に対応するデータクラスの基底。
+    /// </summary>
+    interface ISqlClause : ISqlQueryFragment{
         // 例えば、WHERE句やORDER BY句などのSQLクエリの一部を表すインターフェース。
     }
     /// <summary>

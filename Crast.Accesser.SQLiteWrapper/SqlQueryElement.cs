@@ -38,17 +38,44 @@ namespace Crast.Accessor.SqlWrapper{
     /// Slotが実際にElementを持つか、他の状態であるかを表す列挙型。
     /// </summary>
     public enum SqlQuerySlotStateEnum{
-        Normal,    // 通常（実体あり）
-        Empty,     // 空（親の構造上スロットはあるが空でもBuild可能）
-        Undefined, // 未定義（クエリ構築途中など、具体的な実体が指定されていない状態）
-        Default    // デフォルト状態
+        /// <summary>
+        /// 通常（実体Elementあり）
+        /// </summary>
+        Normal,
+        /// <summary>
+        /// 空（親の構造上スロットはあるが空でもBuild可能）
+        /// </summary>
+        Empty,
+        /// <summary>
+        /// 未定義（クエリ構築途中など、具体的な実体が指定されていない状態）
+        /// </summary>
+        Undefined,
+        /// <summary>
+        /// デフォルト（親のデフォルト値を使用するため、具体的な実体が指定されていない状態）
+        /// </summary>
+        Default
     }
+    /// <summary>
+    /// Slotが実際にElementを持つ必要があるか、他の状態でも成立するかを表す列挙型。
+    /// </summary>
     [Flags]
     public enum SqlQuerySlotCapabilities{
+        /// <summary>
+        /// 実際にElementを持つ必要があるスロット。
+        /// </summary>
         None = 0,
-        AllowEmpty = 1 << 0,        // 中身が無くても成立するスロット
-        AllowUndefined = 1 << 1,    // 常に中身のあるElementで置換しなければならないスロットが存在するなら、それはUndefined不可となるが、存在するか……？
-        AllowDefault = 1 << 2       // デフォルト指定が存在するスロット
+        /// <summary>
+        /// 中身が無くても成立するスロット。
+        /// </summary>
+        AllowEmpty = 1 << 0,
+        /// <summary>
+        /// 中身が未定義の状態で仮置き可能なスロット。
+        /// </summary>
+        AllowUndefined = 1 << 1,
+        /// <summary>
+        /// 親Elementのデフォルト値が使用可能なスロット。
+        /// </summary>
+        AllowDefault = 1 << 2
     }
 
     #endregion
@@ -355,7 +382,48 @@ namespace Crast.Accessor.SqlWrapper{
         #endregion
     }
 
+    /// <summary>
+    /// SqlBuiltQueryFragmentの前後に、前方空白文字・後方空白文字を保持するためのクラス。
+    /// </summary>
+    /// <remarks>
+    ///BuildでElementからSlotに送る際に、Triviaと本体を区別するためのパッケージ。
+    /// </remarks>
+    public sealed record SqlBuiltQueryFragmentNode{
+        //DebugBuildと違って、Trivia・本体・Triviaの順になるため、上で加工後にTriviaと合成する。
+        //あ、いや、こっちもSlot同様にstateを挟む必要があるか。そうして上に上げていく流れになるはず。
 
+        public SqlQuerySlotStateEnum State { get; init; }
+        public SqlBuiltQueryFragment Leading { get; init; }
+        public SqlBuiltQueryFragment? Main { get; init; }
+        public SqlBuiltQueryFragment Trailing { get; init; }
+        public SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum state, SqlBuiltQueryFragment leading, SqlBuiltQueryFragment? main, SqlBuiltQueryFragment trailing){
+            if (state == SqlQuerySlotStateEnum.Normal && main == null) { throw new ArgumentException("Normal状態のFragmentNodeに本体がない"); }
+            if (state != SqlQuerySlotStateEnum.Normal && main != null) { throw new ArgumentException("Normal状態以外のFragmentNodeに本体がある"); }
+
+            if (leading.TriviaOnly == false) { throw new ArgumentException("前方空白文字に空白文字型でないFragmentが含まれている"); }
+            if (trailing.TriviaOnly == false) { throw new ArgumentException("後方空白文字に空白文字型でないFragmentが含まれている"); }
+            if (main?.TriviaOnly == true) { throw new ArgumentException("本体文字列がに空白文字型のFragmentになっている"); }
+
+            State = state;
+            Leading = leading;
+            Main = main;
+            Trailing = trailing;
+        }
+        /// <summary>
+        /// 前方のTriviaを保持したまま、Mainの前に別のFragmentを接続する。
+        /// </summary>
+        /// <param name="added"></param>
+        /// <param name="context"></param>
+        /// <returns></returns>
+        public SqlBuiltQueryFragmentNode MergeMainBefore(SqlBuiltQueryFragment added, SqlBuildContext context){
+            return new SqlBuiltQueryFragmentNode(
+                SqlQuerySlotStateEnum.Normal,
+                Leading,
+                Main != null ? added.Join(Main.Value, context) : added,
+                Trailing
+            );
+        }
+    }
 
 
     /// <summary>
