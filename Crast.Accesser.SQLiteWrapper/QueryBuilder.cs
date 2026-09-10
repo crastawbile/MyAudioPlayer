@@ -191,7 +191,7 @@ namespace Crast.Accessor.SqlWrapper {
 
 
         // 最終的な SqlBuiltQuery を生成する
-        public SqlBuiltQuery BuildQuery(SqlBuiltQueryFragment sql) => new(sql.Main, _parameters, Dialect.Type);
+        public SqlBuiltQuery BuildQuery(SqlBuiltQueryFragmentText sql) => new(sql.Main, _parameters, Dialect.Type);
     }
     /// <summary>
     /// SqlDebugBuiltQueryを出力する過程で、途中の情報を管理するためのクラス。
@@ -294,23 +294,19 @@ namespace Crast.Accessor.SqlWrapper {
 
 
     /// <summary>
-    /// SqlQueryElement.Buildから出力される加工途中の文字列を担当するクラス。
+    /// SqlQueryElement.Buildから出力される加工途中の文字列そのものを表すクラス。
     /// </summary>
     /// <remarks>
-    /// 文字列以外にも、瞬間的に必要な情報はContextよりこちらで保持する。
-    /// <br></br>
     /// 預かるデータ自体はプレースホルダー化されるため、こっちの文字列はstructでいい。
     /// </remarks>
     /// <param name="Main"></param>
-    public readonly record struct SqlBuiltQueryFragment(
+    public readonly record struct SqlBuiltQueryFragmentText(
         string Main,
         SqlQueryFragmentConditions Before, //前方制約
-        SqlQueryFragmentConditions After, //後方制約
-        bool TriviaOnly = false, //Triviaのみのフラグメントか否か。
-        int? Precedence = null//式型における、演算の優先順位。括弧の有無に影響。
+        SqlQueryFragmentConditions After //後方制約
         ) {
-        public static SqlBuiltQueryFragment EmptyTrivia => new("", new SqlQueryFragmentConditions(), new SqlQueryFragmentConditions(), TriviaOnly: true);
-        public static SqlBuiltQueryFragment EmptyStructure => new("", new SqlQueryFragmentConditions(), new SqlQueryFragmentConditions(), TriviaOnly: false);
+        public static SqlBuiltQueryFragmentText Empty => new("", new SqlQueryFragmentConditions(), new SqlQueryFragmentConditions());
+        public bool IsEmpty => Main == "" && Before == new SqlQueryFragmentConditions() && After == new SqlQueryFragmentConditions();
         /// <summary>
         /// 別のFragmentを後ろに接続する。
         /// </summary>
@@ -319,11 +315,12 @@ namespace Crast.Accessor.SqlWrapper {
         /// <returns></returns>
         /// <exception cref="ArgumentException"></exception>
         /// <exception cref="InvalidOperationException"></exception>
-        public SqlBuiltQueryFragment Join(SqlBuiltQueryFragment after, SqlBuildContext context) {
+        public SqlBuiltQueryFragmentText Join(SqlBuiltQueryFragmentText after, SqlBuildContext context) {
+            if(after.IsEmpty) { return this; }
+            if(this.IsEmpty) { return after; }
+
             string beforeText = this.Main;
-            if (beforeText == "") { return after; }
             string afterText = after.Main;
-            if (afterText == "") { return this; }
 
             //接続部分の制約チェック
             //現状、制約は空白文字と改行のみなので、改行を追加すれば空白文字は判定しなくていい。
@@ -363,12 +360,10 @@ namespace Crast.Accessor.SqlWrapper {
                         throw new InvalidOperationException($"想定外のAlertPolicy");
                 }
             }
-            return new SqlBuiltQueryFragment(
+            return new SqlBuiltQueryFragmentText(
                 beforeText + afterText,
                 this.Before,
-                after.After,
-                TriviaOnly: this.TriviaOnly && after.TriviaOnly,
-                Precedence: this.Precedence ?? after.Precedence
+                after.After
             );
 
         }
@@ -378,9 +373,9 @@ namespace Crast.Accessor.SqlWrapper {
         /// <param name="node"></param>
         /// <param name="context"></param>
         /// <returns></returns>
-        public SqlBuiltQueryFragment JoinNode(SqlBuiltQueryFragmentNode node, SqlBuildContext context) {
+        public SqlBuiltQueryFragmentText JoinNode(SqlBuiltQueryFragmentNode node, SqlBuildContext context) {
             var result = this.Join(node.Leading, context);
-            result = result.Join(node.Main, context);
+            result = node.Main.HasValue ? result.Join(node.Main!.Value, context) : result;
             result = result.Join(node.Trailing, context);
             return result;
         }

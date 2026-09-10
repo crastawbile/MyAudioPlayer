@@ -279,7 +279,7 @@ namespace Crast.Accessor.SqlWrapper{
         }
 
         #region 対象スロットのメソッドを使用する中継メソッド
-        public SqlBuiltQueryFragment Build(SqlBuildContext context) => EnsureValidSlot(out _).Build(context);
+        public SqlBuiltQueryFragmentNode Build(SqlBuildContext context) => EnsureValidSlot(out _).Build(context);
         public SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context) => EnsureValidSlot(out _).DebugBuild(context);
         #endregion
 

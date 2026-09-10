@@ -117,7 +117,7 @@ namespace Crast.Accessor.SqlWrapper{
 
 
         #region Buildの通知シンクにIDを追加する処理
-        public SqlBuiltQueryFragment Build(SqlBuildContext context){
+        public SqlBuiltQueryFragmentNode Build(SqlBuildContext context){
             if (!IsNormal) throw new InvalidOperationException("実データのないスロットは親エレメントの債務で構築する");
             var fragment = State.Element!.Build(context);
             context.AdaptDiagnostics(Id);
@@ -383,39 +383,116 @@ namespace Crast.Accessor.SqlWrapper{
     }
 
     /// <summary>
-    /// SqlBuiltQueryFragmentの前後に、前方空白文字・後方空白文字を保持するためのクラス。
+    /// SqlQueryElement.Buildから出力される加工途中の文字列そのものを表すクラス。
     /// </summary>
     /// <remarks>
-    ///BuildでElementからSlotに送る際に、Triviaと本体を区別するためのパッケージ。
+    /// 本体の前後に、前方空白文字・後方空白文字を分けて保持するためのクラス。
+    /// <br></br>
+    /// ただし、TriviaElementのBuild結果も同じ型になるため、その場合はMainがTriviaとなる。
+    /// <br></br>
+    /// 文字列以外にも、瞬間的に必要な情報はContextよりこちらで保持する。
     /// </remarks>
-    public sealed record SqlBuiltQueryFragmentNode{
+    public readonly record struct SqlBuiltQueryFragmentNode{
         //DebugBuildと違って、Trivia・本体・Triviaの順になるため、上で加工後にTriviaと合成する。
         //あ、いや、こっちもSlot同様にstateを挟む必要があるか。そうして上に上げていく流れになるはず。
 
+        //あーいや、待て、これで行くと言う事は、TriviaElementはElementの下に付くのではなく、SlotFieldの下につく……？
+        //いや、Triviaを許容するかどうかはElementがTrivia型であるかどうかに依存するから、Elementの債務のはずだ。
+        //だが、SlotStateがUndefindedである場合の、その存在しないElementの前後に付随するTriviaは、いったいどこに存在するのか。
+
         public SqlQuerySlotStateEnum State { get; init; }
-        public SqlBuiltQueryFragment Leading { get; init; }
-        public SqlBuiltQueryFragment? Main { get; init; }
-        public SqlBuiltQueryFragment Trailing { get; init; }
-        public SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum state, SqlBuiltQueryFragment leading, SqlBuiltQueryFragment? main, SqlBuiltQueryFragment trailing){
+        public SqlBuiltQueryFragmentText Leading { get; init; }
+        public SqlBuiltQueryFragmentText? Main { get; init; }
+        public SqlBuiltQueryFragmentText Trailing { get; init; }
+        public bool TriviaOnly { get; init; } //Triviaのみのフラグメントか否か。
+        public int? Precedence { get; init; } //式型における、演算の優先順位。括弧の有無に影響。
+
+        public bool IsEmpty => State == SqlQuerySlotStateEnum.Empty;
+        public bool IsUndefined => State == SqlQuerySlotStateEnum.Undefined;
+        public bool IsDefault => State == SqlQuerySlotStateEnum.Default;
+        public bool IsNormal => State == SqlQuerySlotStateEnum.Normal;
+        //コンストラクタ
+        public SqlBuiltQueryFragmentNode(
+            SqlQuerySlotStateEnum state,
+            SqlBuiltQueryFragmentNode leading,
+            SqlBuiltQueryFragmentNode? main,
+            SqlBuiltQueryFragmentNode trailing,
+            bool triviaOnly = false,
+            int? precedence = null
+            )
+        {
             if (state == SqlQuerySlotStateEnum.Normal && main == null) { throw new ArgumentException("Normal状態のFragmentNodeに本体がない"); }
             if (state != SqlQuerySlotStateEnum.Normal && main != null) { throw new ArgumentException("Normal状態以外のFragmentNodeに本体がある"); }
 
             if (leading.TriviaOnly == false) { throw new ArgumentException("前方空白文字に空白文字型でないFragmentが含まれている"); }
             if (trailing.TriviaOnly == false) { throw new ArgumentException("後方空白文字に空白文字型でないFragmentが含まれている"); }
-            if (main?.TriviaOnly == true) { throw new ArgumentException("本体文字列がに空白文字型のFragmentになっている"); }
+            if (main?.TriviaOnly == true) { throw new ArgumentException("本体文字列が空白文字型のFragmentになっている"); }
 
+            if (triviaOnly){
+                if (!leading.IsEmpty) { throw new ArgumentException("TriviaOnly状態のFragmentNodeに別で前方空白文字が存在する"); }
+                if (main != null) { throw new ArgumentException("TriviaOnly状態のFragmentNodeの本体が存在しない"); }
+                if (!trailing.IsEmpty) { throw new ArgumentException("TriviaOnly状態のFragmentNodeに別で後方空白文字が存在する"); }
+            }
+
+
+            State = state;
+            Leading = leading.Main!.Value;
+            Main = main?.Main;
+            Trailing = trailing.Main!.Value;
+            TriviaOnly = triviaOnly;
+            Precedence = precedence;
+        }
+        //Textから生成する用のプライベートコンストラクタ
+        private SqlBuiltQueryFragmentNode (
+            SqlQuerySlotStateEnum state,
+            SqlBuiltQueryFragmentText leading,
+            SqlBuiltQueryFragmentText? main,
+            SqlBuiltQueryFragmentText trailing,
+            bool triviaOnly = false,
+            int? precedence = null
+            ){
+            if (state == SqlQuerySlotStateEnum.Normal && main == null) { throw new ArgumentException("Normal状態のFragmentNodeに本体がない"); }
+            if (state != SqlQuerySlotStateEnum.Normal && main != null) { throw new ArgumentException("Normal状態以外のFragmentNodeに本体がある"); }
+            if (triviaOnly){
+                if (!leading.IsEmpty) { throw new ArgumentException("TriviaOnly状態のFragmentNodeに別で前方空白文字が存在する"); }
+                if (main != null) { throw new ArgumentException("TriviaOnly状態のFragmentNodeの本体が存在しない"); }
+                if (!trailing.IsEmpty) { throw new ArgumentException("TriviaOnly状態のFragmentNodeに別で後方空白文字が存在する"); }
+            }
             State = state;
             Leading = leading;
             Main = main;
             Trailing = trailing;
+            TriviaOnly = triviaOnly;
+            Precedence = precedence;
         }
+        #region ファクトリ
+        public static SqlBuiltQueryFragmentNode CreateNormalStructure(SqlBuiltQueryFragmentNode leading, SqlBuiltQueryFragmentNode main, SqlBuiltQueryFragmentNode trailing, int? precedence = null){
+            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Normal, leading, main, trailing, false, precedence);
+        }
+        public static SqlBuiltQueryFragmentNode CreateNormalTrivia(SqlBuiltQueryFragmentNode main) {
+            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Normal, SqlBuiltQueryFragmentText.Empty, main.Main, SqlBuiltQueryFragmentText.Empty, true, null);
+        }
+        public static SqlBuiltQueryFragmentNode CreateEmptyStructure(SqlBuiltQueryFragmentNode leading, SqlBuiltQueryFragmentNode trailing){
+            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Empty, leading, null, trailing, false, null);
+        }
+        public static SqlBuiltQueryFragmentNode CreateEmptyTrivia(){
+            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Empty, SqlBuiltQueryFragmentText.Empty, null, SqlBuiltQueryFragmentText.Empty, true, null);
+        }
+        public static SqlBuiltQueryFragmentNode CreateUndefinedStructure(SqlBuiltQueryFragmentNode leading, SqlBuiltQueryFragmentNode trailing){
+            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Undefined, leading, null, trailing, false, null);
+        }
+        public static SqlBuiltQueryFragmentNode CreateDefaultStructure(SqlBuiltQueryFragmentNode leading, SqlBuiltQueryFragmentNode trailing){
+            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Default, leading, null, trailing, false, null);
+        }
+        #endregion
         /// <summary>
         /// 前方のTriviaを保持したまま、Mainの前に別のFragmentを接続する。
         /// </summary>
         /// <param name="added"></param>
         /// <param name="context"></param>
         /// <returns></returns>
-        public SqlBuiltQueryFragmentNode MergeMainBefore(SqlBuiltQueryFragment added, SqlBuildContext context){
+        public SqlBuiltQueryFragmentNode MergeMainBefore(SqlBuiltQueryFragmentText added, SqlBuildContext context){
+            if (!IsNormal) throw new InvalidOperationException("Normal状態のFragmentNodeでないとMergeMainBeforeは使用できません。");
             return new SqlBuiltQueryFragmentNode(
                 SqlQuerySlotStateEnum.Normal,
                 Leading,
@@ -703,7 +780,7 @@ namespace Crast.Accessor.SqlWrapper{
         /// </summary>
         /// <param name="context"></param>
         /// <returns></returns>
-        public abstract SqlBuiltQueryFragment Build(SqlBuildContext context);
+        public abstract SqlBuiltQueryFragmentText Build(SqlBuildContext context);
         /// <summary>
         /// 人間用のクエリ構造図を構築する処理。
         /// </summary>
