@@ -1,6 +1,17 @@
 ﻿using System.Collections.Immutable;
+using System.Data;
 
 namespace Crast.Accessor.SqlWrapper{
+
+    //枝単位での更新処理やクローン時のID変更などは、上に上がることが可能なDraftとPathが担う。
+    //ElementとSlotは、直下と自身だけを見て自分の処理を行う。
+    //ただし、Build・DebugBuild・Clone及びAdaptToに関しては、Element自体が再帰メソッドを持つのが必須なため
+    //再帰メソッド自体はElementに実装するが、呼び出しはPath(AdaptToはDraft)から行う。
+
+    //共変と不変を両方対応するのはほぼ不可能であるため、
+    //不変部分のみジェネリック型の型パラメータで対応し、共変部分は読み取り側で型キャストして対処する。
+    //メソッドの所属型と引数型と返り値型がジェネリックで共通化されていることを保証することが第一義であるため、
+    //ジェネリックで解決できないならパターンマッチングで解決するしかない。
 
     #region 引数用のデータクラスや列挙型
 
@@ -22,7 +33,19 @@ namespace Crast.Accessor.SqlWrapper{
     /// </summary>
     /// <param name="Name">子要素の役割を識別する列挙値。</param>
     /// <param name="Index">同じ役割を持つ子要素のインデックス。</param>
-    public readonly record struct SqlQueryElementRole(SqlQueryElementRoleEnum Name, int Index);
+    public readonly record struct SqlQueryElementRole(SqlQueryElementRoleEnum Name, UInt16 Index) {
+        #region ファクトリ
+        public static SqlQueryElementRole Trivia(int index = 0) => new(SqlQueryElementRoleEnum.Trivia, (UInt16)index);
+        public static SqlQueryElementRole Listed(int index = 0) => new(SqlQueryElementRoleEnum.Listed, (UInt16)index);
+        public static SqlQueryElementRole Statement(int index = 0) => new(SqlQueryElementRoleEnum.Statement, (UInt16)index);
+        public static SqlQueryElementRole Relation(int index = 0) => new(SqlQueryElementRoleEnum.Relation, (UInt16)index);
+        public static SqlQueryElementRole Selection(int index = 0) => new(SqlQueryElementRoleEnum.Selection, (UInt16)index);
+        public static SqlQueryElementRole Condition(int index = 0) => new(SqlQueryElementRoleEnum.Condition, (UInt16)index);
+        public static SqlQueryElementRole Argument(int index = 0) => new(SqlQueryElementRoleEnum.Argument, (UInt16)index);
+        public static SqlQueryElementRole Ordering(int index = 0) => new(SqlQueryElementRoleEnum.Ordering, (UInt16)index);
+        public static SqlQueryElementRole Naming(int index = 0) => new(SqlQueryElementRoleEnum.Naming, (UInt16)index);
+        #endregion
+    };
     public enum SqlQueryElementRoleEnum{
         Statement,//実行可能な命令の実体:ISqlStatement:単数
         Relation,//データの供給源（表など）:ITableExpression:複数
@@ -31,7 +54,8 @@ namespace Crast.Accessor.SqlWrapper{
         Argument,//演算や関数の入力値:IScalarExpression:複数
         Ordering,//並び替えや集約の基準:ISqlElement (Sort):複数
         Naming,//名前定義（別名など）:SqlIdentifier:単数
-        Trivia//空白文字やコメントなどの構造に影響しない要素:SqlQueryTriviaElement:複数
+        Trivia,//空白文字やコメントなどの構造に影響しない要素:SqlQueryTriviaElement:複数
+        Listed//リスト型の直下。直上のElementに対してはリストの要素という以外の意味が無い。
     }
 
     /// <summary>
@@ -61,24 +85,49 @@ namespace Crast.Accessor.SqlWrapper{
     [Flags]
     public enum SqlQuerySlotCapabilities{
         /// <summary>
-        /// 実際にElementを持つ必要があるスロット。
+        /// Flag用の何も指定されていない0。
         /// </summary>
         None = 0,
         /// <summary>
+        /// 実際にElementを持つ必要があるスロット。
+        /// </summary>
+        OnlyNormal = 1 << 0,
+        /// <summary>
         /// 中身が無くても成立するスロット。
         /// </summary>
-        AllowEmpty = 1 << 0,
+        OnlyEmpty = 1 << 1,
         /// <summary>
         /// 中身が未定義の状態で仮置き可能なスロット。
         /// </summary>
-        AllowUndefined = 1 << 1,
+        OnlyUndefined = 1 << 2,
         /// <summary>
         /// 親Elementのデフォルト値が使用可能なスロット。
         /// </summary>
-        AllowDefault = 1 << 2
+        OnlyDefault = 1 << 3,
+        AllowEmpty = OnlyNormal | OnlyEmpty,
+        AllowUndefined = OnlyNormal | OnlyUndefined,
+        AllowDefault = OnlyNormal | OnlyDefault,
+        ExceptEmpty = OnlyNormal | OnlyUndefined | OnlyDefault,
+        ExceptUndefined = OnlyNormal | OnlyEmpty | OnlyDefault,
+        ExceptDefault = OnlyNormal | OnlyEmpty | OnlyUndefined,
+        All = OnlyNormal | OnlyEmpty | OnlyUndefined | OnlyDefault
+    }
+    /// <summary>
+    /// Stateの状態遷移時にTriviaをどう更新するかを指定するEnum
+    /// </summary>
+    public enum SqlQueryTriviaMergeMode {
+        KeepOld,
+        OverWrite,
+        PrependNew,
+        AppendNew,
+        NestInner,
+        NestOuter
     }
 
     #endregion
+
+
+    #region SlotField
 
     /// <summary>
     /// Elementのプロパティ型としてのスロットの非ジェネリック基底。
@@ -87,71 +136,71 @@ namespace Crast.Accessor.SqlWrapper{
     /// Elementの不変かつ固定の一部として、IDと取りうる状態を保持する。
     /// PointerはこのFieldを指し示し、この中身を操作する。
     /// </remarks>
-    public abstract record SqlQuerySlotField {
-        public SqlQuerySlotId Id { get;}
+    internal abstract record class SqlQuerySlotFieldAbstract{
+        /// <summary>
+        /// このスロットの中身を指すID。
+        /// </summary>
+        internal SqlQuerySlotId Id { get; }
         internal string IdString => $"#0x{Id.Value:x8} ";
-        public SqlQuerySlotCapabilities Capabilities { get; }
-        public virtual SqlQuerySlotState　State { get;}
-        public abstract Type GenericType { get; }
-        public SqlQuerySlotField (SqlQuerySlotId id, SqlQuerySlotCapabilities caps, SqlQuerySlotState state) {
-            ValidateState(state);
+        internal SqlQuerySlotCapabilities Capabilities { get; }
+        internal virtual SqlQuerySlotStateAbstract State { get; }
+        //コンストラクタ
+        internal SqlQuerySlotFieldAbstract(SqlQuerySlotId id, SqlQuerySlotCapabilities caps, SqlQuerySlotStateAbstract state){
             Id = id;
             Capabilities = caps;
-            State = state;
+            State = ValidateState(state);
         }
         /// <summary>
-        /// StateがCapabilityに適合するかどうかと、Elementがジェネリック型に適合するかどうかを、それぞれチェックして例外を出す。
+        /// StateがCapabilityに適合するかどうかをチェックして例外を出す。
         /// </summary>
         /// <param name="state"></param>
-        protected abstract SqlQuerySlotState ValidateState(SqlQuerySlotState state);
-
+        protected SqlQuerySlotStateAbstract ValidateState(SqlQuerySlotStateAbstract state){
+            if (state.IsEmpty && !Capabilities.HasFlag(SqlQuerySlotCapabilities.OnlyEmpty)) throw new ArgumentException("Empty slot is not allowed.");
+            if (state.IsUndefined && !Capabilities.HasFlag(SqlQuerySlotCapabilities.OnlyUndefined)) throw new ArgumentException("Undefined slot is not allowed.");
+            if (state.IsDefault && !Capabilities.HasFlag(SqlQuerySlotCapabilities.OnlyDefault)) throw new ArgumentException("Default slot is not allowed.");
+            return state;
+        }
+        
         #region 短絡プロパティ
         public bool IsNormal => State.IsNormal;
         public bool IsDefault => State.IsDefault;
         public bool IsEmpty => State.IsEmpty;
         public bool IsUndefined => State.IsUndefined;
-
-        public bool HasChild => IsNormal && State.Element!.HasChild;
+        public bool CanNormal => Capabilities.HasFlag(SqlQuerySlotCapabilities.OnlyNormal);
+        public bool CanEmpty => Capabilities.HasFlag(SqlQuerySlotCapabilities.OnlyEmpty);
+        public bool CanUndefined => Capabilities.HasFlag(SqlQuerySlotCapabilities.OnlyUndefined);
+        public bool CanDefault => Capabilities.HasFlag(SqlQuerySlotCapabilities.OnlyDefault);
+        public bool HasChild => State.HasChild;
+        public bool HasUndefined => State.HasUndefined;
+        public SqlType EnableType => State.EnableType;
         #endregion
 
-
-
         #region Buildの通知シンクにIDを追加する処理
-        public SqlBuiltQueryFragmentNode Build(SqlBuildContext context){
-            if (!IsNormal) throw new InvalidOperationException("実データのないスロットは親エレメントの債務で構築する");
-            var fragment = State.Element!.Build(context);
+        internal virtual SqlBuiltQueryFragment Build(SqlBuildContext context) {
+            var fragment = State.Element.Build(context);
             context.AdaptDiagnostics(Id);
             return fragment;
         }
-        public SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
-            if (!IsNormal) throw new InvalidOperationException("実データのないスロットは親エレメントの債務で構築する");
-            var fragment = State.Element!.DebugBuild(context);
-            context.AdaptDiagnostics(Id);
-
-            //出力文字列にも、設定次第でIDを付与する。
-            var idStr = context.Options.ShowIds ? IdString : string.Empty;
-            fragment.Values[0] = $"{idStr}{fragment.Values[0]}";
+        internal virtual SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context) {
+            var fragment = State.Element.DebugBuild(context);
             return fragment;
         }
         #endregion
 
         #region Elementのメソッドを呼び出す処理
-        public IEnumerable<(SqlQueryElementRole,SqlQuerySlotField)> IterateChildren() {
-            if (!IsNormal) yield break;
-            else State.Element!.IterateChildren();
-        }
-        public SqlQuerySlotField? GetChildByRole(SqlQueryElementRole role) => State.GetChildByRole(role);
-        public SqlQuerySlotField? GetChildById(SqlQuerySlotId id) => State.GetChildById(id);
-        public SqlQueryElementRole? GetRoleById(SqlQuerySlotId childId, out SqlQuerySlotField? targetSlot) => State.GetRoleById(childId, out targetSlot);
-        #endregion
+        /// <summary>
+        /// 子世代のSlotFieldを、Roleで取得する。
+        /// </summary>
+        internal abstract SqlQuerySlotFieldAbstract? GetChildByRole(SqlQueryElementRole role);
+        /// <summary>
+        /// 子世代のSlotFieldを、IDで取得する。
+        /// </summary>
+        internal abstract SqlQuerySlotFieldAbstract? GetChildById(SqlQuerySlotId id);
+        /// <summary>
+        /// IDで指定された子世代のSlotFieldのRoleを取得する。
+        /// </summary>
+        internal abstract SqlQueryElementRole? GetRoleById(SqlQuerySlotId childId, out SqlQuerySlotFieldAbstract? targetSlot);
 
-        #region 状態遷移用メソッド
-        public abstract SqlQuerySlotField RecreateAlter(SqlQuerySlotState newState);
-        public abstract SqlQuerySlotField ReplaceAlter(SqlQueryElement element);
-        public abstract SqlQuerySlotField FillAlter(SqlQueryElement element);
-        public abstract SqlQuerySlotField ToEmpty();
-        public abstract SqlQuerySlotField ToUndefined();
-        public abstract SqlQuerySlotField ToDefault();
         #endregion
 
         #region IDを辿る処理
@@ -171,7 +220,7 @@ namespace Crast.Accessor.SqlWrapper{
         /// </summary>
         /// <param name="path"></param>
         /// <returns></returns>
-        public SqlQuerySlotField? GetSlotField(SqlQueryPath path){
+        internal SqlQuerySlotFieldAbstract? GetSlotField(SqlQueryPath path){
             switch (ResolvePath(path)){
                 case SqlQueryPathResolve.Self:
                     return this;
@@ -179,10 +228,9 @@ namespace Crast.Accessor.SqlWrapper{
                 case SqlQueryPathResolve.Descend:
                     var current = this;
                     foreach (var id in path.Ids){
-                        if (current.IsNormal
-                            && current.State.GetChildById(new SqlQuerySlotId(id)) is SqlQuerySlotField next){
+                        if (current.IsNormal && current.GetChildById(new SqlQuerySlotId(id)) is SqlQuerySlotFieldAbstract next){
                             current = next;
-                        } else {
+                        }else{
                             return null;
                         }
                     }
@@ -193,8 +241,13 @@ namespace Crast.Accessor.SqlWrapper{
                     return null;
             }
         }
-
-        public SqlQueryPath? GetPathByElement(SqlQueryElement target, out SqlQuerySlotField? targetSlot){
+        /// <summary>
+        /// 与えられたElementがこのノードの子孫に存在する場合、そのElementまでのパスを返す。存在しない場合はnull。
+        /// </summary>
+        /// <param name="target"></param>
+        /// <param name="targetSlot"></param>
+        /// <returns></returns>
+        internal SqlQueryPath? GetPathByElement(SqlQueryElement target, out SqlQuerySlotFieldAbstract? targetSlot){
             targetSlot = null;
             if (!IsNormal) return null;
             if (object.ReferenceEquals(State.Element, target)){
@@ -206,7 +259,13 @@ namespace Crast.Accessor.SqlWrapper{
             }
             return null;
         }
-        public SqlQueryPath? GetPathById(SqlQuerySlotId targetId, out SqlQuerySlotField? targetSlot){
+        /// <summary>
+        /// 与えられたIDを持つSlotがこのノードの子孫に存在する場合、そのSlotまでのパスを返す。存在しない場合はnull。
+        /// </summary>
+        /// <param name="targetId"></param>
+        /// <param name="targetSlot"></param>
+        /// <returns></returns>
+        internal SqlQueryPath? GetPathById(SqlQuerySlotId targetId, out SqlQuerySlotFieldAbstract? targetSlot){
             targetSlot = null;
             if (!IsNormal) return null;
             if (this.Id == targetId){
@@ -218,7 +277,7 @@ namespace Crast.Accessor.SqlWrapper{
             }
             return null;
         }
-        public SqlQueryPath? GetPathBySelector(SqlQuerySelector selector, out SqlQuerySlotField? targetSlot){
+        internal SqlQueryPath? GetPathBySelector(SqlQuerySelector selector, out SqlQuerySlotFieldAbstract? targetSlot){
             targetSlot = null;
             if (!IsNormal) return null;
             if (selector.RootId != Id) return null;
@@ -227,18 +286,19 @@ namespace Crast.Accessor.SqlWrapper{
                 return new(Id, []);
             }
 
-            int[] ids = new int[selector.Length];//完走しない限り読み取らないので初期値は気にしない。
+            uint[] ids = new uint[selector.Length];//完走しない限り読み取らないので初期値は気にしない。
             var currentNode = this;
             for (var i = 0; i < selector.Length; i++){
                 var role = selector.Roles[i];
+
                 bool found = false;
-                foreach (var (childRole, child) in currentNode.IterateChildren()){
-                    if (role == childRole){
-                        currentNode = child;
-                        ids[i] = child.Id.Value;
-                        found = true;
-                        break;
-                    }
+                foreach (var (childRole, child) in currentNode.State.Element.IterateChildren()){
+                    if (role == childRole) continue;
+
+                    currentNode = child;
+                    ids[i] = child.Id.Value;
+                    found = true;
+                    break;
                 }
                 if (!found) return null;//その役割の子要素が見つからなかった場合はnullを返す。
             }
@@ -246,7 +306,7 @@ namespace Crast.Accessor.SqlWrapper{
             targetSlot = currentNode;
             return new(Id, [.. ids]);
         }
-        public SqlQuerySelector? GetSelectorByPath(SqlQueryPath path, out SqlQuerySlotField? targetSlot){
+        internal SqlQuerySelector? GetSelectorByPath(SqlQueryPath path, out SqlQuerySlotFieldAbstract? targetSlot){
             targetSlot = null;
             if (!IsNormal) return null;
             if (path.RootId != Id) return null;
@@ -260,13 +320,13 @@ namespace Crast.Accessor.SqlWrapper{
             for (var i = 0; i < path.Length; i++){
                 var id = path.Ids[i];
                 bool found = false;
-                foreach (var (childRole, child) in currentNode.IterateChildren()){
-                    if (id == child.Id.Value){
-                        currentNode = child;
-                        roles[i] = childRole;
-                        found = true;
-                        break;
-                    }
+                foreach (var (childRole, child) in currentNode.State.Element.IterateChildren()){
+                    if (id == child.Id.Value) continue;
+
+                    currentNode = child;
+                    roles[i] = childRole;
+                    found = true;
+                    break;
                 }
                 if (!found) return null;//そのIDの子要素が見つからなかった場合はnullを返す。
             }
@@ -275,216 +335,800 @@ namespace Crast.Accessor.SqlWrapper{
             return new(Id, [.. roles]);
         }
 
+        
+        #endregion
+    }
+
+
+    /// <summary>
+    /// Elementのプロパティ型としてのスロットのジェネリック基底。
+    /// </summary>
+    /// <remarks>
+    /// <inheritdoc cref="SqlQuerySlotFieldAbstract"/>
+    /// </remarks>
+    internal abstract record class SqlQuerySlotField<TElement> : SqlQuerySlotFieldAbstract
+        where TElement : SqlQueryElement
+    {
+        internal virtual Type GenericType => typeof(TElement);
+        internal override SqlQuerySlotState<TElement> State => (SqlQuerySlotState<TElement>)base.State;
+        //コンストラクタ
+        internal SqlQuerySlotField(SqlQuerySlotId id, SqlQuerySlotCapabilities caps, SqlQuerySlotState<TElement> state)
+            : base(id, caps, state)
+        {
+        }
+
+    }
+
+    internal sealed record class SqlQueryTriviaSlotField : SqlQuerySlotField<SqlQueryTriviaElement> {
+        internal override Type GenericType => typeof(SqlQueryTriviaElement);
+        internal override SqlQueryTriviaSlotState State => (SqlQueryTriviaSlotState)base.State;
+        //コンストラクタ
+        internal SqlQueryTriviaSlotField(SqlQuerySlotId id, SqlQuerySlotCapabilities caps, SqlQueryTriviaSlotState state)
+            : base(id, caps, state)
+        {
+        }
+
+        #region ファクトリ
+        internal static SqlQueryTriviaSlotField Create(
+            SqlQueryDraft draft,
+            SqlQueryTriviaSlotState state
+            )
+        {
+            return new SqlQueryTriviaSlotField(
+                SqlQuerySlotId.GetNextId(draft),
+                SqlQuerySlotCapabilities.OnlyNormal,
+                state
+                );
+        }
+        internal static SqlQueryTriviaSlotField CreateNormal(
+            SqlQueryDraft draft,
+            SqlQueryTriviaElement element
+            )
+        {
+            return new SqlQueryTriviaSlotField(
+                SqlQuerySlotId.GetNextId(draft),
+                SqlQuerySlotCapabilities.OnlyNormal,
+                SqlQueryTriviaSlotState.CreateNormal(element)
+                );
+        }
+        #endregion
+
+        #region Buildの通知シンクにIDを追加する処理
+        internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
+            var fragment = State.Element.Build(context);
+            context.AdaptDiagnostics(Id);
+            return fragment;
+        }
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
+            var fragment = State.Element.DebugBuild(context);
+            context.AdaptDiagnostics(Id);
+            return fragment;
+        }
+        #endregion
+
+        #region 状態遷移用メソッド
 
         /// <summary>
-        /// SqlQueryDraft.Updateの内部で、クエリツリー全体を再構築するために使用されるメソッド。targetに一致する部分をreplacementに置き換えた新しいクエリツリーを返す。
+        /// スロットの中身を置き換える。
         /// </summary>
-        /// <remarks>
-        /// path不正はnull、replacementの型不正は例外を返すべき。
-        /// 変更位置自体のSlotのIDは維持されなければならない。それ以外は対象のIDを使うか、draftから振り直す。
-        /// </remarks>
-        public abstract SqlQuerySlotField? ReplaceRecursive(SqlQueryDraft draft, SqlQueryPath path, SqlQuerySlotState replacement, bool refreshId = true);
+        /// <param name="element"></param>
+        /// <returns></returns>
+        public SqlQueryTriviaSlotField ReplaceState(SqlQueryTriviaSlotState state){
+            return new (Id, Capabilities, state);
+        }
+        #endregion
+
+        #region Elementのメソッドを呼び出す処理
+        /// <summary>
+        /// 子世代のSlotFieldを、Roleで取得する。
+        /// </summary>
+        internal override SqlQueryTriviaSlotField? GetChildByRole(SqlQueryElementRole role) => null;
+        /// <summary>
+        /// 子世代のSlotFieldを、IDで取得する。
+        /// </summary>
+        internal override SqlQueryTriviaSlotField? GetChildById(SqlQuerySlotId id) => null;
+        /// <summary>
+        /// IDで指定された子世代のSlotFieldのRoleを取得する。
+        /// </summary>
+        internal override SqlQueryElementRole? GetRoleById(SqlQuerySlotId childId, out SqlQuerySlotFieldAbstract? targetSlot){
+            targetSlot = null;
+            return null;
+        }
 
         #endregion
     }
+    internal sealed record class SqlQueryTriviaListSlotField : SqlQuerySlotField<SqlQueryTriviaList>{
+        internal override Type GenericType => typeof(SqlQueryTriviaList);
+        internal override SqlQueryTriviaListSlotState State => (SqlQueryTriviaListSlotState)base.State;
+        //コンストラクタ
+        internal SqlQueryTriviaListSlotField(SqlQuerySlotId id, SqlQuerySlotCapabilities caps, SqlQueryTriviaListSlotState state)
+            : base(id, caps, state)
+        {
+        }
+
+        #region ファクトリ
+        internal static SqlQueryTriviaListSlotField Create(
+            SqlQueryDraft draft,
+            SqlQueryTriviaListSlotState state
+            )
+        {
+            return new SqlQueryTriviaListSlotField(
+                SqlQuerySlotId.GetNextId(draft),
+                SqlQuerySlotCapabilities.OnlyNormal,
+                state
+                );
+        }
+        internal static SqlQueryTriviaListSlotField CreateNormal(
+            SqlQueryDraft draft,
+            SqlQueryTriviaList element
+            )
+        {
+            return new SqlQueryTriviaListSlotField(
+                SqlQuerySlotId.GetNextId(draft),
+                SqlQuerySlotCapabilities.OnlyNormal,
+                SqlQueryTriviaListSlotState.CreateNormal(element)
+                );
+        }
+        #endregion
+
+        #region Buildの通知シンクにIDを追加する処理
+        internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
+            var fragment = State.Element.Build(context);
+            context.AdaptDiagnostics(Id);
+            return fragment;
+        }
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
+            var fragment = State.Element.DebugBuild(context);
+            context.AdaptDiagnostics(Id);
+            return fragment;
+        }
+        #endregion
+
+        #region 状態遷移用メソッド
+        /// <summary>
+        /// スロットの中身を置き換える。
+        /// </summary>
+        /// <param name="element"></param>
+        /// <returns></returns>
+        internal SqlQueryTriviaListSlotField ReplaceState(SqlQueryTriviaListSlotState state){
+            return new(Id, Capabilities, state);
+        }
+        internal SqlQueryTriviaListSlotField ToNormal(SqlQueryTriviaList element) {
+            return new(Id, Capabilities, State.ToNormal(element));
+        }
+        #endregion
+
+        #region Elementのメソッドを呼び出す処理
+        /// <summary>
+        /// 子世代のSlotFieldを、Roleで取得する。
+        /// </summary>
+        internal override SqlQueryTriviaSlotField? GetChildByRole(SqlQueryElementRole role)=> State.Element.GetChildByRole(role);
+        /// <summary>
+        /// 子世代のSlotFieldを、IDで取得する。
+        /// </summary>
+        internal override SqlQueryTriviaSlotField? GetChildById(SqlQuerySlotId id) => State.Element.GetChildById(id);
+        /// <summary>
+        /// IDで指定された子世代のSlotFieldのRoleを取得する。
+        /// </summary>
+        internal override SqlQueryElementRole? GetRoleById(SqlQuerySlotId childId, out SqlQuerySlotFieldAbstract? targetSlot) => State.Element.GetRoleById(childId, out targetSlot);
+
+        #endregion
+    }
+    internal record class SqlQueryStructuralSlotField<TElement> : SqlQuerySlotField<TElement>
+        where TElement : SqlQueryStructuralElement
+    {
+        internal override SqlQueryStructuralSlotState<TElement> State => (SqlQueryStructuralSlotState<TElement>)base.State;
+        //コンストラクタ
+        internal SqlQueryStructuralSlotField(SqlQuerySlotId id, SqlQuerySlotCapabilities caps, SqlQueryStructuralSlotState<TElement> state)
+            : base(id, caps, state)
+        {
+        }
+
+        #region ファクトリ
+
+        /// <summary>
+        /// 新規のIDでFieldを生成する。
+        /// </summary>
+        /// <remarks>
+        /// Fieldを、CloneでもReplaceでも無く生成するのは、Elementの初期作成時のみ。
+        /// その場合、Capabilitiesの詳細設定は必須なので、SqlQuerySlotId.GetNextId(draft)の分くらいしかファクトリに委託できない。
+        /// <br></br>
+        /// 空の代用Elementを使う場合は、SqlQuerySubElement<TElement>.CreateNull(draft).WrapToUndefinedState()で。
+        /// </remarks>
+        internal static SqlQueryStructuralSlotField<TElement> Create(
+            SqlQueryDraft draft,
+            SqlQuerySlotCapabilities caps,
+            SqlQueryStructuralSlotState<TElement> state
+            )
+        {
+            return new SqlQueryStructuralSlotField<TElement>(
+                SqlQuerySlotId.GetNextId(draft),
+                caps,
+                state
+                );
+        }
+        #endregion
+        
+        #region 状態遷移用メソッド
+
+        /// <summary>
+        /// スロットの中身を置き換える。
+        /// </summary>
+        /// <param name="element"></param>
+        /// <returns></returns>
+        internal SqlQueryStructuralSlotField<TElement> ReplaceState(SqlQueryStructuralSlotState<TElement> state){
+            return new SqlQueryStructuralSlotField<TElement>(Id, Capabilities, state);
+        }
+        /// <summary>
+        /// スロットの中身を埋める。既に中身がある場合は何もしない。
+        /// </summary>
+        /// <param name="element"></param>
+        /// <returns></returns>
+        public SqlQueryStructuralSlotField<TElement> Fill(TElement element, SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew){
+            if (IsNormal) return this;
+            return new SqlQueryStructuralSlotField<TElement>(Id, Capabilities, State.Fill(element,mode));
+        }
+        /// <summary>
+        /// スロットの中身を実体にする。
+        /// </summary>
+        /// <returns></returns>
+        public virtual SqlQueryStructuralSlotField<TElement> ToNormal(
+            TElement element,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            return new SqlQueryStructuralSlotField<TElement>(Id, Capabilities, State.ToNormal(element, mode));
+        }
+        /// <summary>
+        /// スロットの中身を空にする。
+        /// </summary>
+        /// <returns></returns>
+        public virtual SqlQueryStructuralSlotField<TElement> ToEmpty(
+            SqlQuerySubElement<TElement>? element = null,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            return new SqlQueryStructuralSlotField<TElement>(Id, Capabilities, State.ToEmpty(element,mode));
+        }
+        /// <summary>
+        /// スロットの中身を未定義にする。
+        /// </summary>
+        /// <returns></returns>
+        public virtual SqlQueryStructuralSlotField<TElement> ToUndefined(
+            SqlQuerySubElement<TElement>? element = null,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            return new SqlQueryStructuralSlotField<TElement>(Id, Capabilities, State.ToUndefined(element, mode));
+        }
+        /// <summary>
+        /// スロットの中身をデフォルトにする。
+        /// </summary>
+        /// <returns></returns>
+        public virtual SqlQueryStructuralSlotField<TElement> ToDefault(
+            SqlQuerySubElement<TElement>? element = null,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            return new SqlQueryStructuralSlotField<TElement>(Id, Capabilities, State.ToDefault(element, mode));
+        }
+        #endregion
+
+        #region Elementのメソッドを呼び出す処理
+        /// <summary>
+        /// 子世代のSlotFieldを、Roleで取得する。
+        /// </summary>
+        internal override SqlQuerySlotFieldAbstract? GetChildByRole(SqlQueryElementRole role){
+            foreach (var (childRole, childField) in State.Element.IterateChildren()){
+                if (childRole == role) return childField;
+            }
+            return null;
+        }
+        /// <summary>
+        /// 子世代のSlotFieldを、IDで取得する。
+        /// </summary>
+        internal override SqlQuerySlotFieldAbstract? GetChildById(SqlQuerySlotId id){
+            foreach (var (_, childField) in State.Element.IterateChildren()){
+                if (childField.Id == id) return childField;
+            }
+            return null;
+        }
+        /// <summary>
+        /// IDで指定された子世代のSlotFieldのRoleを取得する。
+        /// </summary>
+        internal override SqlQueryElementRole? GetRoleById(SqlQuerySlotId childId, out SqlQuerySlotFieldAbstract? targetSlot){
+            foreach (var (childRole, childField) in State.Element.IterateChildren()){
+                if (childField.Id == childId){
+                    targetSlot = childField;
+                    return childRole;
+                }
+            }
+            targetSlot = null;
+            return null;
+        }
+
+        #endregion
+    }
+
+
+    #endregion
+
+    #region SlotState
+
     /// <summary>
     /// スロットの中身の非ジェネリック基底。
     /// </summary>
     /// <remarks>
     /// ElementもしくはDefault・Empty・Undefinedの状態を表すラッパー。
     /// </remarks>
-    public abstract record SqlQuerySlotState {
-        public SqlQuerySlotStateEnum StateEnum { get; }
-        public virtual SqlQueryElement? Element { get; } // StateEnum == Normal の時のみ実体が入る
+    internal abstract record class SqlQuerySlotStateAbstract{
+        internal SqlQuerySlotStateEnum StateEnum { get; }
+        internal virtual SqlQueryElement Element => IsNormal ? MainElement! : SubElement!;// StateEnum == Normal の時のみMainが返る
+        protected virtual SqlQueryElement? MainElement { get; }//実体状態のStateが持つElement
+        protected virtual SqlQuerySubElement? SubElement { get; }//実文字要素が空白文字を非実体でも保持するための代用Element
         /// <summary>
         /// 不確定型ノードを配下に持つかどうか。
         /// </summary>
-        public bool HasUndefined { get; }
+        internal bool HasUndefined { get; }
         /// <summary>
         /// 対応可能なSQL方言範囲。
         /// </summary>
-        public SqlType EnableType { get; }
-        public abstract Type GenericType { get; }
-
-        #region 短絡プロパティ
-        public bool IsNormal => StateEnum == SqlQuerySlotStateEnum.Normal;
-        public bool IsDefault => StateEnum == SqlQuerySlotStateEnum.Default;
-        public bool IsEmpty => StateEnum == SqlQuerySlotStateEnum.Empty;
-        public bool IsUndefined => StateEnum == SqlQuerySlotStateEnum.Undefined;
-        #endregion
-
-        public SqlQuerySlotState(SqlQuerySlotStateEnum stateEnum, SqlQueryElement? element) {
-            if (IsNormal) ValidateElement(element!);
+        internal SqlType EnableType { get; }
+        internal abstract Type GenericType { get; }
+        //フルコンストラクタ
+        internal SqlQuerySlotStateAbstract(SqlQuerySlotStateEnum stateEnum, SqlQueryElement? mainElement = null, SqlQuerySubElement? subElement = null){
             StateEnum = stateEnum;
-            Element = element;
+            if (mainElement is SqlQueryTriviaElement te) {
+                if (stateEnum != SqlQuerySlotStateEnum.Normal) throw new ArgumentException("空文字要素は非実体で生成できない。");
+                MainElement = te;
+                SubElement = null;
+            } else if (mainElement is SqlQueryTriviaList tl) {
+                if (stateEnum != SqlQuerySlotStateEnum.Normal) throw new ArgumentException("空文字要素は非実体で生成できない。");
+                MainElement = tl;
+                SubElement = null;
+            } else if (stateEnum == SqlQuerySlotStateEnum.Normal) {
+                if (mainElement is null) throw new ArgumentException("実体要素は代用Elementのみからは生成できない。");
+                if (subElement is null) throw new ArgumentException("実文字要素は代用Element無しに生成できない。");
+                MainElement = mainElement;
+                SubElement = subElement;
+            } else {
+                if (subElement is null) throw new ArgumentException("実文字要素は代用Element無しに生成できない。");
+                MainElement = null;
+                SubElement = subElement;
+            }
 
-            //HasUndefinedとEnableTypeは、SlotよりもElementの状態ではあるが、
-            //Elementのコンストラクタは複雑なため、Elementのコンストラクタが完了した後に処理されるこちらに隔離する。
-            HasUndefined = false;
-            EnableType = IsNormal ? Element!.SafeType : SqlType.All;
-            if (IsNormal) {
-                foreach (var (_,slot) in element!.IterateChildren()) {
-                    HasUndefined |= (slot.IsUndefined);
+
+
+            //HasUndefinedとEnableTypeの決定処理。
+            //どちらかというとElementの状態ではあるが、
+            //Elementの多重継承コンストラクタの処理が終わった後に処理したいため、
+            //完成したElementを受け取るStateのコンストラクタに隔離。
+            //get;指定により、コンストラクタから分離できない。
+            HasUndefined = IsUndefined;
+            EnableType = IsNormal ? Element!.EnableType : SqlType.All;
+            if (IsNormal){
+                foreach (var (_, slot) in mainElement!.IterateChildren()){
+                    HasUndefined |= (slot.State!.IsUndefined);
                     EnableType &= slot.State.EnableType;
                 }
             }
         }
-        /// <summary>
-        /// Elementがジェネリック型に適合するかどうかをチェックして例外を出す。
-        /// </summary>
-        protected abstract void ValidateElement(SqlQueryElement element);
-        /// <summary>
-        /// SlotStateがジェネリック型に適合するかどうかをチェックして例外を出す。
-        /// </summary>
-        protected abstract SqlQuerySlotState ValidateSlotState(SqlQuerySlotState slotState);
 
-        #region 状態遷移用メソッド
-        public abstract SqlQuerySlotState ReplaceAlter(SqlQueryElement element);
-        public abstract SqlQuerySlotState FillAlter(SqlQueryElement element);
-        public abstract SqlQuerySlotState ToEmpty();
-        public abstract SqlQuerySlotState ToUndefined();
-        public abstract SqlQuerySlotState ToDefault();
+        #region 短絡プロパティ
+        internal bool IsNormal => StateEnum == SqlQuerySlotStateEnum.Normal;
+        internal bool IsDefault => StateEnum == SqlQuerySlotStateEnum.Default;
+        internal bool IsEmpty => StateEnum == SqlQuerySlotStateEnum.Empty;
+        internal bool IsUndefined => StateEnum == SqlQuerySlotStateEnum.Undefined;
+
+        internal bool HasChild => IsNormal && Element!.HasChild;
+        internal bool HasChildNode => IsNormal && Element!.HasChildNode;
         #endregion
 
         #region Elementのメソッドを呼び出すだけの処理
-        public IEnumerable<(SqlQueryElementRole, SqlQuerySlotField)> IterateChildren(){
-            if (!IsNormal) yield break;
-            else Element!.IterateChildren();
+        internal abstract SqlQuerySlotStateAbstract CloneNode(SqlQueryDraft draft);
+        internal abstract SqlQuerySlotStateAbstract? ReplaceChildrenByRole(
+            IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            );
+        internal abstract SqlQuerySlotStateAbstract? ReplaceChildrenById(
+            IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            );
+        #endregion
+
+    }
+    /// <summary>
+    /// スロットの中身のジェネリック基底。
+    /// </summary>
+    /// <remarks>
+    /// ElementもしくはDefault・Empty・Undefinedの状態を表すラッパー。
+    /// </remarks>
+    internal abstract record class SqlQuerySlotState<TElement> : SqlQuerySlotStateAbstract
+        where TElement : SqlQueryElement
+    {
+        internal override Type GenericType => typeof(TElement);
+        protected override TElement? MainElement => (TElement?)base.MainElement;
+        protected override SqlQuerySubElement<TElement>? SubElement => (SqlQuerySubElement<TElement>?)base.SubElement;
+        //コンストラクタ
+        internal SqlQuerySlotState(SqlQuerySlotStateEnum stateEnum, TElement? mainElement, SqlQuerySubElement<TElement>? subElement)
+            :base(stateEnum, mainElement, subElement)
+        {
         }
-        internal abstract SqlQuerySlotState CloneNode(SqlQueryDraft draft);
-        public SqlQuerySlotField? GetChildByRole(SqlQueryElementRole role) => Element?.GetChildByRole(role);
-        public SqlQuerySlotField? GetChildById(SqlQuerySlotId id) => Element?.GetChildById(id);
-        public SqlQueryElementRole? GetRoleById(SqlQuerySlotId childId, out SqlQuerySlotField? targetSlot){
-            if (Element?.GetRoleById(childId, out var slot) is SqlQueryElementRole role){
-                targetSlot = slot;
-                return role;
-            } else {
-                targetSlot = null;
-                return null;
-            }
+    }
+
+    internal sealed record class SqlQueryTriviaSlotState : SqlQuerySlotState<SqlQueryTriviaElement> {
+        internal override Type GenericType => typeof(SqlQueryTriviaElement);
+        internal override SqlQueryTriviaElement Element => base.MainElement!;
+        protected override SqlQueryTriviaElement MainElement => base.MainElement!;
+        protected override SqlQuerySubElement<SqlQueryTriviaElement>? SubElement => null;
+        //コンストラクタ
+        internal SqlQueryTriviaSlotState(SqlQueryTriviaElement mainElement)
+            : base(SqlQuerySlotStateEnum.Normal, mainElement, null)
+        {
         }
+        #region ファクトリ
+        public static SqlQueryTriviaSlotState CreateNormal(SqlQueryTriviaElement element) => new(element);
+        #endregion
+
+        #region 状態遷移用メソッド
+        /// <summary>
+        /// スロットの中身を置き換える。
+        /// </summary>
+        /// <param name="element"></param>
+        /// <returns></returns>
+        internal SqlQueryTriviaSlotState ToNormal(SqlQueryTriviaElement element) => new (element);
+        #endregion
+
+        /// <summary>
+        /// StateをFieldに挿入する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <param name="field"></param>
+        /// <returns></returns>
+        internal SqlQueryTriviaSlotField SetInField(SqlQueryTriviaSlotField field) => field.ReplaceState(this);
+
+        #region Elementのメソッドを呼び出すだけの処理
+        internal override SqlQueryTriviaSlotState CloneNode(SqlQueryDraft draft) => this;
+        internal override SqlQueryTriviaSlotState? ReplaceChildrenByRole(
+            IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew)
+        {
+            return null;
+        }
+        internal override SqlQueryTriviaSlotState? ReplaceChildrenById(
+            IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew)
+        {
+            return null;
+        }
+        #endregion
+
+    }
+    internal sealed record class SqlQueryTriviaListSlotState : SqlQuerySlotState<SqlQueryTriviaList> {
+        internal override Type GenericType => typeof(SqlQueryTriviaList);
+        internal override SqlQueryTriviaList Element => base.MainElement!;
+        protected override SqlQueryTriviaList MainElement => base.MainElement!;
+        protected override SqlQuerySubElement<SqlQueryTriviaList>? SubElement => null;
+        //コンストラクタ
+        internal SqlQueryTriviaListSlotState(SqlQueryTriviaList mainElement)
+            : base(SqlQuerySlotStateEnum.Normal, mainElement, null)
+        {
+        }
+        #region ファクトリ
+        public static SqlQueryTriviaListSlotState CreateNormal(SqlQueryTriviaList element) => new(element);
+        #endregion
+
+        #region 状態遷移用メソッド
+        /// <summary>
+        /// スロットの中身を置き換える。
+        /// </summary>
+        /// <param name="element"></param>
+        /// <returns></returns>
+        internal SqlQueryTriviaListSlotState ToNormal(SqlQueryTriviaList element) => new(element);
+        #endregion
+
+        /// <summary>
+        /// StateをFieldに挿入する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <param name="field"></param>
+        /// <returns></returns>
+        internal SqlQueryTriviaListSlotField SetInField(SqlQueryTriviaListSlotField field) => field.ReplaceState(this);
+
+        #region Elementのメソッドを呼び出すだけの処理
+        internal override SqlQueryTriviaListSlotState CloneNode(SqlQueryDraft draft) => new(MainElement.CloneNode(draft));
+        internal override SqlQueryTriviaListSlotState? ReplaceChildrenByRole(
+            IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            var newMainElement = MainElement!.ReplaceChildrenByRole(states);
+            if (newMainElement is null) return null;
+            if (newMainElement is not SqlQueryTriviaList mte) throw new NotSupportedException("ReplaceでElementの型が変わる異常事態。");
+            return ToNormal(mte);
+        }
+        internal override SqlQueryTriviaListSlotState? ReplaceChildrenById(
+            IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            var newMainElement = MainElement!.ReplaceChildrenById(states);
+            if (newMainElement is null) return null;
+            if (newMainElement is not SqlQueryTriviaList mte) throw new NotSupportedException("ReplaceでElementの型が変わる異常事態。");
+            return ToNormal(mte);
+        }
+        #endregion
+    }
+    internal sealed record class SqlQueryStructuralSlotState<TElement> : SqlQuerySlotState<TElement>
+        where TElement : SqlQueryStructuralElement
+    {
+        //コンストラクタ
+        internal SqlQueryStructuralSlotState(SqlQuerySlotStateEnum stateEnum, TElement? mainElement, SqlQuerySubElement<TElement>? subElement)
+            : base(stateEnum, mainElement, subElement)
+        { }
+
+        #region ファクトリ
+        public static SqlQueryStructuralSlotState<TElement> CreateNormal(TElement element){
+            return new (SqlQuerySlotStateEnum.Normal, element, null);
+        }
+        public static SqlQueryStructuralSlotState<TElement> CreateEmpty(SqlQuerySubElement<TElement> element){
+            return new (SqlQuerySlotStateEnum.Empty, null, element);
+        }
+        public static SqlQueryStructuralSlotState<TElement> CreateUndefined(SqlQuerySubElement<TElement> element){
+            return new (SqlQuerySlotStateEnum.Undefined, null, element);
+        }
+        public static SqlQueryStructuralSlotState<TElement> CreateDefault(SqlQuerySubElement<TElement> element){
+            return new (SqlQuerySlotStateEnum.Default, null, element);
+        }
+        #endregion
+
+        #region 状態遷移用メソッド
 
 
         /// <summary>
-        /// 子要素を置き換えた新しいクエリノードを返す。
+        /// Trivia合成モードに応じて、直下Elementのコンストラクタに渡す空白文字要素の中身を生成する。
         /// </summary>
-        /// <param name="role">置き換える子要素の役割を識別する文字列。</param>
-        /// <param name="newElement">置き換える新しい子要素。</param>
-        /// <returns>置き換え後の新しいクエリノード。</returns>
-        public virtual SqlQuerySlotState? ReplaceChildById(SqlQueryDraft draft, SqlQuerySlotId id, SqlQuerySlotState newNode){
-            if (GetRoleById(id, out _) is SqlQueryElementRole role) return ReplaceChildByRole(draft, role, newNode);
-            else return null;
+        /// <param name="mode"></param>
+        /// <param name="oldElement"></param>
+        /// <param name="newElement"></param>
+        /// <returns></returns>
+        private static (
+            SqlQueryTriviaListSlotState LeadingTrivia,
+            SqlQueryTriviaListSlotState TrailingTrivia
+            ) ReloadTriviaListState(
+            SqlQueryTriviaMergeMode mode,
+            SqlQueryStructuralElement oldElement,
+            SqlQueryStructuralElement newElement
+            )
+        {
+            var newLeadingFields = newElement.LeadingTrivia
+                                .State.Element.IterateChildren()
+                                .Select(t => t.Slot)
+                                .Cast<SqlQueryTriviaSlotField>();
+            var newTrailingFields = newElement.TrailingTrivia
+                                .State.Element.IterateChildren()
+                                .Select(t => t.Slot)
+                                .Cast<SqlQueryTriviaSlotField>();
+            var oldLeadingFields = oldElement.LeadingTrivia
+                                .State.Element.IterateChildren()
+                                .Select(t => t.Slot)
+                                .Cast<SqlQueryTriviaSlotField>();
+            var oldTrailingFields = oldElement.TrailingTrivia
+                                .State.Element.IterateChildren()
+                                .Select(t => t.Slot)
+                                .Cast<SqlQueryTriviaSlotField>();
+
+            switch (mode){
+                case SqlQueryTriviaMergeMode.KeepOld:
+                    return (oldElement.LeadingTrivia.State, oldElement.TrailingTrivia.State);
+                case SqlQueryTriviaMergeMode.OverWrite:
+                    return (newElement.LeadingTrivia.State, newElement.TrailingTrivia.State);
+                case SqlQueryTriviaMergeMode.PrependNew:
+                    return (
+                        new SqlQueryTriviaList([.. newLeadingFields, .. oldLeadingFields]).WrapToNormalState(),
+                        new SqlQueryTriviaList([.. newTrailingFields, .. oldTrailingFields]).WrapToNormalState()
+                        );
+                case SqlQueryTriviaMergeMode.AppendNew:
+                    return (
+                        new SqlQueryTriviaList([.. oldLeadingFields, .. newLeadingFields]).WrapToNormalState(),
+                        new SqlQueryTriviaList([.. oldTrailingFields, .. newTrailingFields]).WrapToNormalState()
+                        );
+                case SqlQueryTriviaMergeMode.NestInner:
+                    return (
+                        new SqlQueryTriviaList([.. oldLeadingFields, .. newLeadingFields]).WrapToNormalState(),
+                        new SqlQueryTriviaList([.. newTrailingFields, .. oldTrailingFields]).WrapToNormalState()
+                        );
+                case SqlQueryTriviaMergeMode.NestOuter:
+                    return (
+                        new SqlQueryTriviaList([.. newLeadingFields, .. oldLeadingFields]).WrapToNormalState(),
+                        new SqlQueryTriviaList([.. oldTrailingFields, .. newTrailingFields]).WrapToNormalState()
+                        );
+                default:
+                    throw new NotImplementedException("SqlQueryTriviaMergeModeの未知の分岐。");
+            }
         }
-        public abstract SqlQuerySlotState? ReplaceChildByRole(SqlQueryDraft draft, SqlQueryElementRole role, SqlQuerySlotState newNode);
 
+        //非実体三種の中身の処理はほぼ同一であるため、単一のメソッドにまとめる。
+        private SqlQueryStructuralSlotState<TElement> ReplaceUnreal(
+            SqlQuerySlotStateEnum stateEnum,
+            SqlQuerySubElement<TElement> newSubElement,
+            SqlQueryTriviaMergeMode mode
+            )
+        {
+            if (stateEnum == SqlQuerySlotStateEnum.Normal) throw new ArgumentException("非実体要素への遷移のみ想定するメソッドである。");
+            //ここから先は、代用Elementを持つ実文字要素だけ考える。
 
+            var (leadingTriviaState, trailingTriviaState) = ReloadTriviaListState(mode, SubElement!, newSubElement);
 
+            //直下代用Elementの空白文字リストIDは引き継ぐ。
+            var outputSubElement = SubElement!.ReplaceChildrenByRole([
+                (SqlQueryElementRole.Trivia(0),leadingTriviaState),
+                (SqlQueryElementRole.Trivia(1),trailingTriviaState)
+                ]);
+
+            return new SqlQueryStructuralSlotState<TElement>(
+                stateEnum,
+                null,
+                outputSubElement
+                );
+        }
+
+        /// <summary>
+        /// スロットの中身を置き換える。
+        /// </summary>
+        /// <param name="element"></param>
+        /// <returns></returns>
+        internal SqlQueryStructuralSlotState<TElement> ToNormal(
+            TElement element,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            var (leadingTriviaState, trailingTriviaState) = ReloadTriviaListState(mode, SubElement!, element);
+
+            //直下代用Elementの空白文字リストIDは引き継ぐ。
+            var outputSubElement = SubElement!.ReplaceTriviaByState(leadingTriviaState, trailingTriviaState);
+
+            var outputMainElement = element.ReplaceTriviaByField(
+                outputSubElement.LeadingTrivia,
+                outputSubElement.TrailingTrivia
+                );
+            if (outputMainElement is not TElement nte) throw new NotImplementedException("replaceでElementの型が変わってしまう異常事態。");
+
+            return new SqlQueryStructuralSlotState<TElement>(
+                SqlQuerySlotStateEnum.Normal,
+                nte,
+                outputSubElement
+                );
+        }
+        /// <summary>
+        /// スロットの中身を埋める。既に中身がある場合は何もしない。
+        /// </summary>
+        /// <param name="element"></param>
+        /// <returns></returns>
+        internal SqlQueryStructuralSlotState<TElement> Fill(
+            TElement element,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            if (IsNormal) return this;
+            return ToNormal(element, mode);
+        }
+        /// <summary>
+        /// スロットの中身を空にする。
+        /// </summary>
+        /// <returns></returns>
+        internal SqlQueryStructuralSlotState<TElement> ToEmpty(
+            SqlQuerySubElement<TElement>? element,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            if (element == null) return new SqlQueryStructuralSlotState<TElement>(SqlQuerySlotStateEnum.Empty, null, SubElement);
+            else return ReplaceUnreal(SqlQuerySlotStateEnum.Empty, element, mode);
+        }
+        /// <summary>
+        /// スロットの中身を未定義にする。
+        /// </summary>
+        /// <returns></returns>
+        internal SqlQueryStructuralSlotState<TElement> ToUndefined(
+            SqlQuerySubElement<TElement>? element,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            if (element == null) return new SqlQueryStructuralSlotState<TElement>(SqlQuerySlotStateEnum.Undefined, null, SubElement);
+            else return ReplaceUnreal(SqlQuerySlotStateEnum.Undefined, element, mode);
+        }
+        /// <summary>
+        /// スロットの中身をデフォルトにする。
+        /// </summary>
+        /// <returns></returns>
+        internal SqlQueryStructuralSlotState<TElement> ToDefault(
+            SqlQuerySubElement<TElement>? element,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            if (element == null) return new SqlQueryStructuralSlotState<TElement>(SqlQuerySlotStateEnum.Default, null, SubElement);
+            else return ReplaceUnreal(SqlQuerySlotStateEnum.Default, element, mode);
+        }
+        #endregion
+
+        /// <summary>
+        /// StateをFieldに挿入する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <param name="field"></param>
+        /// <returns></returns>
+        internal SqlQueryStructuralSlotField<TElement> SetInField(SqlQueryStructuralSlotField<TElement> field) => field.ReplaceState(this);
+
+        #region Elementのメソッドを呼び出すだけの処理
+        internal override SqlQueryStructuralSlotState<TElement> CloneNode(SqlQueryDraft draft) {
+            return new SqlQueryStructuralSlotState<TElement>(StateEnum, (TElement?)MainElement?.CloneNode(draft), SubElement?.CloneNode(draft));
+        }
+        internal override SqlQueryStructuralSlotState<TElement>? ReplaceChildrenByRole(
+            IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            if (IsNormal){
+                var newMainElement = MainElement!.ReplaceChildrenByRole(states);
+                if (newMainElement is null) return null;
+                if (newMainElement is not TElement mte) throw new NotImplementedException("ReplaceでElementの型が変わる異常事態。");
+                return ToNormal(mte, mode);
+            }else{
+                //Normal状態ではないなら、実文字要素であるのは確定するので代用Elementは存在する。
+                var newSubElement = SubElement!.ReplaceChildrenByRole(states);
+                if (newSubElement is null) return null;
+                return ReplaceUnreal(StateEnum, newSubElement, mode);
+            }
+        }
+        internal override SqlQueryStructuralSlotState<TElement>? ReplaceChildrenById(
+            IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew
+            )
+        {
+            if (IsNormal){
+                var newMainElement = MainElement!.ReplaceChildrenById(states);
+                if (newMainElement is null) return null;
+                if (newMainElement is not TElement mte) throw new NotImplementedException("ReplaceでElementの型が変わる異常事態。");
+                return ToNormal(mte, mode);
+            }else{
+                //Normal状態ではないなら、実文字要素であるのは確定するので代用Elementは存在する。
+                var newSubElement = SubElement!.ReplaceChildrenById(states);
+                if (newSubElement is null) return null;
+                return ReplaceUnreal(StateEnum, newSubElement, mode);
+            }
+        }
         #endregion
     }
 
+    #endregion
+
+
     /// <summary>
-    /// SqlQueryElement.Buildから出力される加工途中の文字列そのものを表すクラス。
+    /// SqlQuerySlotFieldAbstract.Buildから出力される加工途中の文字列そのものを表すクラス。
     /// </summary>
     /// <remarks>
     /// 本体の前後に、前方空白文字・後方空白文字を分けて保持するためのクラス。
     /// <br></br>
-    /// ただし、TriviaElementのBuild結果も同じ型になるため、その場合はMainがTriviaとなる。
-    /// <br></br>
     /// 文字列以外にも、瞬間的に必要な情報はContextよりこちらで保持する。
     /// </remarks>
-    public readonly record struct SqlBuiltQueryFragmentNode{
-        //DebugBuildと違って、Trivia・本体・Triviaの順になるため、上で加工後にTriviaと合成する。
-        //あ、いや、こっちもSlot同様にstateを挟む必要があるか。そうして上に上げていく流れになるはず。
-
-        //あーいや、待て、これで行くと言う事は、TriviaElementはElementの下に付くのではなく、SlotFieldの下につく……？
-        //いや、Triviaを許容するかどうかはElementがTrivia型であるかどうかに依存するから、Elementの債務のはずだ。
-        //だが、SlotStateがUndefindedである場合の、その存在しないElementの前後に付随するTriviaは、いったいどこに存在するのか。
-
-        public SqlQuerySlotStateEnum State { get; init; }
+    internal record SqlBuiltQueryFragmentNode : SqlBuiltQueryFragment{
         public SqlBuiltQueryFragmentText Leading { get; init; }
         public SqlBuiltQueryFragmentText? Main { get; init; }
         public SqlBuiltQueryFragmentText Trailing { get; init; }
-        public bool TriviaOnly { get; init; } //Triviaのみのフラグメントか否か。
-        public int? Precedence { get; init; } //式型における、演算の優先順位。括弧の有無に影響。
 
-        public bool IsEmpty => State == SqlQuerySlotStateEnum.Empty;
-        public bool IsUndefined => State == SqlQuerySlotStateEnum.Undefined;
-        public bool IsDefault => State == SqlQuerySlotStateEnum.Default;
-        public bool IsNormal => State == SqlQuerySlotStateEnum.Normal;
         //コンストラクタ
         public SqlBuiltQueryFragmentNode(
-            SqlQuerySlotStateEnum state,
-            SqlBuiltQueryFragmentNode leading,
-            SqlBuiltQueryFragmentNode? main,
-            SqlBuiltQueryFragmentNode trailing,
-            bool triviaOnly = false,
-            int? precedence = null
+            SqlBuiltQueryFragmentText leading,
+            SqlBuiltQueryFragmentText? main,
+            SqlBuiltQueryFragmentText trailing
             )
         {
-            if (state == SqlQuerySlotStateEnum.Normal && main == null) { throw new ArgumentException("Normal状態のFragmentNodeに本体がない"); }
-            if (state != SqlQuerySlotStateEnum.Normal && main != null) { throw new ArgumentException("Normal状態以外のFragmentNodeに本体がある"); }
-
             if (leading.TriviaOnly == false) { throw new ArgumentException("前方空白文字に空白文字型でないFragmentが含まれている"); }
             if (trailing.TriviaOnly == false) { throw new ArgumentException("後方空白文字に空白文字型でないFragmentが含まれている"); }
             if (main?.TriviaOnly == true) { throw new ArgumentException("本体文字列が空白文字型のFragmentになっている"); }
 
-            if (triviaOnly){
-                if (!leading.IsEmpty) { throw new ArgumentException("TriviaOnly状態のFragmentNodeに別で前方空白文字が存在する"); }
-                if (main != null) { throw new ArgumentException("TriviaOnly状態のFragmentNodeの本体が存在しない"); }
-                if (!trailing.IsEmpty) { throw new ArgumentException("TriviaOnly状態のFragmentNodeに別で後方空白文字が存在する"); }
-            }
-
-
-            State = state;
-            Leading = leading.Main!.Value;
-            Main = main?.Main;
-            Trailing = trailing.Main!.Value;
-            TriviaOnly = triviaOnly;
-            Precedence = precedence;
-        }
-        //Textから生成する用のプライベートコンストラクタ
-        private SqlBuiltQueryFragmentNode (
-            SqlQuerySlotStateEnum state,
-            SqlBuiltQueryFragmentText leading,
-            SqlBuiltQueryFragmentText? main,
-            SqlBuiltQueryFragmentText trailing,
-            bool triviaOnly = false,
-            int? precedence = null
-            ){
-            if (state == SqlQuerySlotStateEnum.Normal && main == null) { throw new ArgumentException("Normal状態のFragmentNodeに本体がない"); }
-            if (state != SqlQuerySlotStateEnum.Normal && main != null) { throw new ArgumentException("Normal状態以外のFragmentNodeに本体がある"); }
-            if (triviaOnly){
-                if (!leading.IsEmpty) { throw new ArgumentException("TriviaOnly状態のFragmentNodeに別で前方空白文字が存在する"); }
-                if (main != null) { throw new ArgumentException("TriviaOnly状態のFragmentNodeの本体が存在しない"); }
-                if (!trailing.IsEmpty) { throw new ArgumentException("TriviaOnly状態のFragmentNodeに別で後方空白文字が存在する"); }
-            }
-            State = state;
-            Leading = leading;
             Main = main;
+            Leading = leading;
             Trailing = trailing;
-            TriviaOnly = triviaOnly;
-            Precedence = precedence;
         }
-        #region ファクトリ
-        public static SqlBuiltQueryFragmentNode CreateNormalStructure(SqlBuiltQueryFragmentNode leading, SqlBuiltQueryFragmentNode main, SqlBuiltQueryFragmentNode trailing, int? precedence = null){
-            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Normal, leading, main, trailing, false, precedence);
-        }
-        public static SqlBuiltQueryFragmentNode CreateNormalTrivia(SqlBuiltQueryFragmentNode main) {
-            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Normal, SqlBuiltQueryFragmentText.Empty, main.Main, SqlBuiltQueryFragmentText.Empty, true, null);
-        }
-        public static SqlBuiltQueryFragmentNode CreateEmptyStructure(SqlBuiltQueryFragmentNode leading, SqlBuiltQueryFragmentNode trailing){
-            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Empty, leading, null, trailing, false, null);
-        }
-        public static SqlBuiltQueryFragmentNode CreateEmptyTrivia(){
-            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Empty, SqlBuiltQueryFragmentText.Empty, null, SqlBuiltQueryFragmentText.Empty, true, null);
-        }
-        public static SqlBuiltQueryFragmentNode CreateUndefinedStructure(SqlBuiltQueryFragmentNode leading, SqlBuiltQueryFragmentNode trailing){
-            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Undefined, leading, null, trailing, false, null);
-        }
-        public static SqlBuiltQueryFragmentNode CreateDefaultStructure(SqlBuiltQueryFragmentNode leading, SqlBuiltQueryFragmentNode trailing){
-            return new SqlBuiltQueryFragmentNode(SqlQuerySlotStateEnum.Default, leading, null, trailing, false, null);
-        }
-        #endregion
+
         /// <summary>
         /// 前方のTriviaを保持したまま、Mainの前に別のFragmentを接続する。
         /// </summary>
@@ -492,325 +1136,122 @@ namespace Crast.Accessor.SqlWrapper{
         /// <param name="context"></param>
         /// <returns></returns>
         public SqlBuiltQueryFragmentNode MergeMainBefore(SqlBuiltQueryFragmentText added, SqlBuildContext context){
-            if (!IsNormal) throw new InvalidOperationException("Normal状態のFragmentNodeでないとMergeMainBeforeは使用できません。");
             return new SqlBuiltQueryFragmentNode(
-                SqlQuerySlotStateEnum.Normal,
                 Leading,
-                Main != null ? added.Join(Main.Value, context) : added,
+                Main != null ? added.JoinAfter(Main, context) : added,
                 Trailing
             );
         }
-    }
+        internal SqlBuiltQueryFragmentNode ReplaceMain(SqlBuiltQueryFragmentText newMain, SqlBuildContext context) {
+            return new SqlBuiltQueryFragmentNode(
+                Leading,
+                newMain,
+                Trailing
+            );
 
+        }
+        internal override SqlBuiltQueryFragmentText ToText(SqlBuildContext context){
+            if (Main is SqlBuiltQueryFragmentText ft) return Leading.JoinAfter(ft, context).JoinAfter(Trailing, context);
+            else return Leading.JoinAfter(Trailing, context);
 
-    /// <summary>
-    /// SlotState用の共変性インターフェイス。
-    /// </summary>
-    /// <remarks>
-    /// Elementを最大基底型で扱えるようにする。
-    /// これにより、Elementは子要素のSlotFieldを固定の型で扱いつつ、SlotStateは共変性で幅広くElementを保持できる。
-    /// つまり、Elementの内部ロジックが固定のSlot型だけ見ればよくなる。
-    /// </remarks>
-    /// <typeparam name="T"></typeparam>
-    public interface ISqlQuerySlotState<out T> {
-        public T? Element { get; }
+        }
     }
     /// <summary>
-    /// SlotField用の共変性インターフェイス。
+    /// リスト型Elementから上のElementに渡すためのリスト型Fragment。
     /// </summary>
-    /// <remarks>
-    /// 基本、共変性はSlotStateの担当だが、中継メソッドの引数にTを使うことがあるので。
-    /// </remarks>
-    /// <typeparam name="T"></typeparam>
-    public interface ISqlQuerySlotField<out T>{
-        public ISqlQuerySlotState<T>? State { get; }
-    }
+    internal record SqlBuiltQueryFragmentListNode : SqlBuiltQueryFragment{
+        public SqlBuiltQueryFragmentText Leading { get; init; }
+        public SqlBuiltQueryFragmentText[] Main { get; init; }
+        public SqlBuiltQueryFragmentText Trailing { get; init; }
+        public int? Precedence => null; //式型における、演算の優先順位。括弧の有無に影響。可変数要素に括弧が要るかどうかは上で判断なのでここではnull。
 
-    /// <summary>
-    /// Elementのプロパティ型としてのスロット。
-    /// </summary>
-    /// <remarks>
-    /// Elementの不変かつ固定の一部として、IDと取りうる状態を保持する。
-    /// PointerはIDでこのFieldを指し示し、この中身のState<T>を操作する。
-    /// </remarks>
-    public sealed record SqlQuerySlotField<T> : SqlQuerySlotField, ISqlQuerySlotField<T> where T : SqlQueryElement {
-        public override Type GenericType => typeof(T);
-        public override SqlQuerySlotState<T> State { get;}
-        ISqlQuerySlotState<T>? ISqlQuerySlotField<T>.State => this.State;
-        //フルコンストラクタ
-        public SqlQuerySlotField(
-            SqlQuerySlotId id,
-            SqlQuerySlotCapabilities caps,
-            SqlQuerySlotState<T> state
+        //コンストラクタ
+        public SqlBuiltQueryFragmentListNode(
+            SqlBuiltQueryFragmentText leading,
+            SqlBuiltQueryFragmentText[] main,
+            SqlBuiltQueryFragmentText trailing
             )
-            : base(id, caps, state)
         {
-            State = state;
-        }
-
-        /// <summary>
-        /// StateがCapabilityに適合するかどうかと、Elementがジェネリック型に適合するかどうかを、それぞれチェックして例外を出す。
-        /// </summary>
-        /// <param name="state"></param>
-        protected override SqlQuerySlotState<T> ValidateState(SqlQuerySlotState state) {
-            if (state.IsDefault && !Capabilities.HasFlag(SqlQuerySlotCapabilities.AllowDefault)) throw new InvalidOperationException("このスロットはDefault化を許可されていません。");
-            if (state.IsEmpty && !Capabilities.HasFlag(SqlQuerySlotCapabilities.AllowEmpty)) throw new InvalidOperationException("このスロットはEmpty化を許可されていません。");
-            if (state.IsUndefined && !Capabilities.HasFlag(SqlQuerySlotCapabilities.AllowUndefined)) throw new InvalidOperationException("このスロットはUndefined化を許可されていません。");
-            if (state is not SqlQuerySlotState<T> s) throw new InvalidOperationException($"{typeof(T)}型に対応したスロットが必要");
-            return s;
-        }
-
-        #region ファクトリメソッド
-        //全てstaticなので、基底には不要。
-        public static SqlQuerySlotField<T> Create(SqlQueryDraft draft, SqlQuerySlotCapabilities caps, SqlQuerySlotState<T> slotState){
-            if (slotState.IsDefault && !caps.HasFlag(SqlQuerySlotCapabilities.AllowDefault)) throw new ArgumentException("このスロットはDefault化を許可されていません。");
-            if (slotState.IsEmpty && !caps.HasFlag(SqlQuerySlotCapabilities.AllowEmpty)) throw new ArgumentException("このスロットはEmpty化を許可されていません。");
-            if (slotState.IsUndefined && !caps.HasFlag(SqlQuerySlotCapabilities.AllowUndefined)) throw new ArgumentException("このスロットはUndefined化を許可されていません。");
-            return new SqlQuerySlotField<T>(SqlQuerySlotId.GetNextId(draft), caps, slotState);
-        }
-        public static SqlQuerySlotField<T> CreateNormal(SqlQueryDraft draft, SqlQuerySlotCapabilities caps, T element){
-            return new SqlQuerySlotField<T>(SqlQuerySlotId.GetNextId(draft), caps, new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Normal, element));
-        }
-        public static SqlQuerySlotField<T> CreateEmpty(SqlQueryDraft draft, SqlQuerySlotCapabilities caps){
-            if (!caps.HasFlag(SqlQuerySlotCapabilities.AllowEmpty)) throw new ArgumentException("このスロットはEmpty化を許可されていません。");
-            return new SqlQuerySlotField<T>(SqlQuerySlotId.GetNextId(draft), caps, new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Empty, default));
-        }
-        public static SqlQuerySlotField<T> CreateUndefined(SqlQueryDraft draft, SqlQuerySlotCapabilities caps){
-            if (!caps.HasFlag(SqlQuerySlotCapabilities.AllowUndefined)) throw new ArgumentException("このスロットはUndefined化を許可されていません。");
-            return new SqlQuerySlotField<T>(SqlQuerySlotId.GetNextId(draft), caps, new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Undefined, default));
-        }
-        public static SqlQuerySlotField<T> CreateDefault(SqlQueryDraft draft, SqlQuerySlotCapabilities caps){
-            if (!caps.HasFlag(SqlQuerySlotCapabilities.AllowDefault)) throw new ArgumentException("このスロットはDefault化を許可されていません。");
-            return new SqlQuerySlotField<T>(SqlQuerySlotId.GetNextId(draft), caps, new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Default, default));
-        }
-        #endregion
-
-        #region 状態遷移用メソッド
-
-        private SqlQuerySlotField<T> PrivateRecreate(SqlQuerySlotState<T> newState){
-            return new SqlQuerySlotField<T>(Id, Capabilities, newState);
-        }
-        public SqlQuerySlotField<T> Recreate(SqlQuerySlotState<T> newState){
-            return PrivateRecreate(ValidateState(newState));
-        }
-        public override SqlQuerySlotField<T> RecreateAlter(SqlQuerySlotState newState){
-            return PrivateRecreate(ValidateState(newState));
-        }
-        public SqlQuerySlotField<T> Replace(T element){
-            return PrivateRecreate(new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Normal, element));
-        }
-        public override SqlQuerySlotField<T> ReplaceAlter(SqlQueryElement element){
-            if (element is not T e) throw new ArgumentException($"{typeof(T)}型のElementが必要");
-            return Replace(e);
-        }
-        public SqlQuerySlotField<T> Fill(T element){
-            if (!IsUndefined && !IsEmpty) throw new InvalidOperationException("このスロットはUndefinedでもEmptyでもありません。");
-            return PrivateRecreate(new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Normal, element));
-        }
-        public override SqlQuerySlotField<T> FillAlter(SqlQueryElement element){
-            if (element is not T e) throw new ArgumentException($"{typeof(T)}型のElementが必要");
-            return Fill(e);
-        }
-        public override SqlQuerySlotField<T> ToEmpty(){
-            if (!Capabilities.HasFlag(SqlQuerySlotCapabilities.AllowEmpty)) throw new InvalidOperationException("このスロットはEmpty化を許可されていません。");
-            return PrivateRecreate(new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Empty, default));
-        }
-        public override SqlQuerySlotField<T> ToUndefined(){
-            if (!Capabilities.HasFlag(SqlQuerySlotCapabilities.AllowUndefined)) throw new InvalidOperationException("このスロットはUndefined化を許可されていません。");
-            return PrivateRecreate(new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Undefined, default));
-        }
-        public override SqlQuerySlotField<T> ToDefault(){
-            if (!Capabilities.HasFlag(SqlQuerySlotCapabilities.AllowDefault)) throw new InvalidOperationException("このスロットはDefault化を許可されていません。");
-            return PrivateRecreate(new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Default, default));
-        }
-
-        #endregion
-
-        #region IDを辿る処理
-
-
-        /// <summary>
-        /// SqlQueryDraft.Updateの内部で、クエリツリー全体を再構築するために使用されるメソッド。Pahtで指定されたSlotのStateをreplacementに置き換えた新しいクエリツリーを返す。
-        /// </summary>
-        /// <remarks>
-        /// path不正はnull、replacementの型不正は例外を返すべき。
-        /// </remarks>
-        public override SqlQuerySlotField<T>? ReplaceRecursive(SqlQueryDraft draft, SqlQueryPath path, SqlQuerySlotState replacement, bool refleshId = false){
-            switch (ResolvePath(path)){
-                case SqlQueryPathResolve.Self:
-                    var correctSelf = ValidateState(replacement);
-                    if (refleshId) correctSelf = correctSelf.CloneNode(draft);
-                    return Recreate(correctSelf);
-                case SqlQueryPathResolve.Descend:
-                    var childPath = path.RemoveRoot();
-                    var childId = childPath.RootId;
-                    if (State.GetRoleById(childId, out SqlQuerySlotField? child) is SqlQueryElementRole childRole//Pathの次のIDに対応する子要素があるかどうか
-                        && child!.ReplaceRecursive(draft, childPath, replacement, refleshId) is SqlQuerySlotField childResult//掘り進んだどこかでPathの指定先が存在するか否か
-                        && State.ReplaceChildByRole(draft, childRole, childResult.State) is SqlQuerySlotState<T> updatedState){//置き換えたSlotStateをジェネリック型に確定でキャスト
-                        return Recreate(updatedState);
-                    } else {
-                        return null;
-                    }
-                case SqlQueryPathResolve.Invalid:
-                default:
-                    return null;
+            if (leading.TriviaOnly == false) { throw new ArgumentException("前方空白文字に空白文字型でないFragmentが含まれている"); }
+            if (trailing.TriviaOnly == false) { throw new ArgumentException("後方空白文字に空白文字型でないFragmentが含まれている"); }
+            foreach (var f in main){
+                if (f.TriviaOnly == true) { throw new ArgumentException("本体文字列が空白文字型のFragmentになっている"); }
             }
-        }
 
-        #endregion
+            Main = main;
+            Leading = leading;
+            Trailing = trailing;
+        }
+        internal override SqlBuiltQueryFragmentText ToText(SqlBuildContext context){
+            var result = Leading;
+            foreach (var fragment in Main) {
+                result = result.JoinAfter(fragment, context);
+            }
+            return result.JoinAfter(Trailing, context);
+
+        }
     }
-    /// <summary>
-    /// スロットの中身。Pointerから変更されるデータツリーのトップ。
-    /// </summary>
-    /// <remarks>
-    /// ElementもしくはDefault・Empty・Undefinedの状態を表すラッパー。
-    /// </remarks>
-    public sealed record SqlQuerySlotState<T> : SqlQuerySlotState, ISqlQuerySlotState<T> where T : SqlQueryElement {
-        public override T? Element { get; } // StateEnum == Normal の時のみ実体が入る
-        public override Type GenericType => typeof(T);
-        //フルコンストラクタ
-        public SqlQuerySlotState(
-            SqlQuerySlotStateEnum state,
-            T? element
-            )
-            : base(state, element)
-        {
-        }
-        /// <summary>
-        /// Elementがジェネリック型に適合するかどうかをチェックして例外を出す。
-        /// </summary>
-        /// <param name="state"></param>
-        protected override void ValidateElement(SqlQueryElement element) {
-            if (element is not T) throw new ArgumentException($"{typeof(T)}型のエレメントが必要");
-        }
-        /// <summary>
-        /// SlotStateがジェネリック型に適合するかどうかをチェックして例外を出す。
-        /// </summary>
-        /// <param name="state"></param>
-        protected override SqlQuerySlotState<T> ValidateSlotState(SqlQuerySlotState slotState){
-            if (slotState is not SqlQuerySlotState<T> s) throw new ArgumentException($"{typeof(T)}型に対応したスロットが必要");
-            else return s;
-        }
-
-        #region ファクトリメソッド
-        //全てstaticなので、基底には不要。
-        public static SqlQuerySlotState<T> CreateNormalWithOldId(T element){
-            return new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Normal, element);
-        }
-        public static SqlQuerySlotState<T> CreateNormalWithClone(SqlQueryDraft draft, T element){
-            return new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Normal, (T)element.CloneNode(draft));
-        }
-        public static SqlQuerySlotState<T> CreateEmpty(){
-            return new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Empty, default);
-        }
-        public static SqlQuerySlotState<T> CreateUndefined(){
-            return new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Undefined, default);
-        }
-        public static SqlQuerySlotState<T> CreateDefault(){
-            return new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Default, default);
-        }
-        #endregion
-
-        #region 状態遷移用メソッド
-
-        public SqlQuerySlotState<T> Replace(T element){
-            return new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Normal, element);
-        }
-        public override SqlQuerySlotState<T> ReplaceAlter(SqlQueryElement element){
-            if (element is not T e) throw new ArgumentException($"{typeof(T)}型のElementが必要");
-            return Replace(e);
-        }
-        public SqlQuerySlotState<T> Fill(T element){
-            if (!IsUndefined && !IsEmpty) throw new InvalidOperationException("このスロットはUndefinedでもEmptyでもありません。");
-            return new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Normal, element);
-        }
-        public override SqlQuerySlotState<T> FillAlter(SqlQueryElement element){
-            if (element is not T e) throw new ArgumentException($"{typeof(T)}型のElementが必要");
-            return Fill(e);
-        }
-        public override SqlQuerySlotState<T> ToEmpty(){
-            return new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Empty, default);
-        }
-        public override SqlQuerySlotState<T> ToUndefined(){
-            return new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Undefined, default);
-        }
-        public override SqlQuerySlotState<T> ToDefault(){
-            return new SqlQuerySlotState<T>(SqlQuerySlotStateEnum.Default, default);
-        }
-
-        #endregion
-
-        #region Elementのメソッドを呼び出すだけの処理
-        internal override SqlQuerySlotState<T> CloneNode(SqlQueryDraft draft){
-            if (!IsNormal) return new SqlQuerySlotState<T>(StateEnum, default);
-            if (Element!.CloneNode(draft) is T clonedElement) return new SqlQuerySlotState<T>(StateEnum, clonedElement);
-            throw new InvalidOperationException("クローンした要素の型が一致しません。");
-        }
-
-        /// <summary>
-        /// 子要素を置き換えた新しいクエリノードを返す。
-        /// </summary>
-        /// <param name="role">置き換える子要素の役割を識別する文字列。</param>
-        /// <param name="newNode">置き換える新しい子要素。</param>
-        /// <returns>置き換え後の新しいクエリノード。</returns>
-        public override SqlQuerySlotState<T>? ReplaceChildById(SqlQueryDraft draft, SqlQuerySlotId id, SqlQuerySlotState newNode){
-            if (GetRoleById(id, out _) is SqlQueryElementRole role) return ReplaceChildByRole(draft, role, newNode);
-            else return null;
-        }
-        public override SqlQuerySlotState<T>? ReplaceChildByRole(SqlQueryDraft draft, SqlQueryElementRole role, SqlQuerySlotState newNode){
-            if (IsNormal && Element!.ReplaceChildByRole(draft, role, newNode) is T correctElement) return Replace(correctElement);
-            else return null;
-        }
-        #endregion
-    }
-
 
 
     /// <summary>
     /// SQLクエリ文字列に対応するデータクラスの基底。
     /// </summary>
-    public abstract record SqlQueryElement{
-        public virtual SqlType SafeType { get; } = SqlType.All;//Allでないエレメントでのみ上書きする。
-        public abstract bool HasChild { get; }//子要素を持つかどうか。空文字型以外は全て持つことになる。空の空文字リストもfalseとなる。つまり、Build可能な子要素を持つかどうか。
-        public abstract bool HasChildNode { get; }//実文字型の子要素を持つかどうか。Token型やリテラル、名前などもfalseとなる。空のリストもfalseとなる。つまり、Build可能な子要素を持つかどうか。
+    internal abstract record SqlQueryElement{
+        internal virtual SqlType EnableType { get; } = SqlType.All;//Allでないエレメントでのみ上書きする。
+        internal abstract bool HasChild { get; }//子要素を持つかどうか。空文字型以外は全て持つことになる。空の空文字リストもfalseとなる。つまり、Build可能な子要素を持つかどうか。
+        internal abstract bool HasChildNode { get; }//実文字型の子要素を持つかどうか。Token型やリテラル、名前などもfalseとなる。空のリストもfalseとなる。つまり、Build可能な子要素を持つかどうか。
 
 
+        //// 構築前に構造の妥当性をチェックする（例：必須の子要素が不足していないか）
+        //public virtual void Validate(){
+        //    ValidateSelf();
+        //    foreach (var (_, newMainElement) in IterateChildren()) newMainElement.Validate();
+        //}
+        //protected virtual void ValidateSelf() { }
+        /// <summary>
+        /// 直接の子要素を反復処理する為のジェネレータ。
+        /// </summary>
+        /// <returns></returns>
+        internal virtual IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotFieldAbstract Slot)> IterateChildren() { yield break; }
+
+        #region 再帰処理
         /// <summary>
         /// 実行用のクエリを構築する処理。
         /// </summary>
         /// <param name="context"></param>
         /// <returns></returns>
-        public abstract SqlBuiltQueryFragmentText Build(SqlBuildContext context);
+        internal abstract SqlBuiltQueryFragment Build(SqlBuildContext context);
         /// <summary>
         /// 人間用のクエリ構造図を構築する処理。
         /// </summary>
         /// <param name="context"></param>
         /// <returns></returns>
-        public abstract SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context);
-        /// <summary>
-        /// 直接の子要素を反復処理する為のジェネレータ。
-        /// </summary>
-        /// <returns></returns>
-        public virtual IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotField Slot)> IterateChildren() { yield break; }
+        internal abstract SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context);
         //再帰的にクローンする必要があるので、この処理ではまずい。
         //internal SqlQueryElement CloneNode() => this with { Id = SqlQueryDraft.GetNewId() };
+        /// <summary>
+        /// 構造を保ったまま、IDのみ再帰的に振り直したクローンを生成する。
+        /// </summary>
+        /// <param name="draft"></param>
+        /// <returns></returns>
         internal abstract SqlQueryElement CloneNode(SqlQueryDraft draft);
-        //// 構築前に構造の妥当性をチェックする（例：必須の子要素が不足していないか）
-        //public virtual void Validate(){
-        //    ValidateSelf();
-        //    foreach (var (_, element) in IterateChildren()) element.Validate();
-        //}
-        //protected virtual void ValidateSelf() { }
+        internal virtual SqlQueryElement AdaptTo(SqlType targetDialect) => this;
+        #endregion
 
-
-
-        public SqlQuerySlotField? GetChildByRole(SqlQueryElementRole role){
+        #region 子要素取得
+        internal virtual bool HasRole(SqlQueryElementRole role) {
+            foreach (var (eachRole, _) in IterateChildren()){
+                if (eachRole == role) return true;
+            }
+            return false;
+        }
+        internal virtual SqlQuerySlotFieldAbstract? GetChildByRole(SqlQueryElementRole role){
             foreach (var (eachRole, child) in IterateChildren()){
                 if (eachRole == role) return child;
             }
             return null;
         }
-        public SqlQuerySlotField? GetChildById(SqlQuerySlotId id){
+        internal virtual SqlQuerySlotFieldAbstract? GetChildById(SqlQuerySlotId id){
             foreach (var (_, child) in IterateChildren()){
                 if (child.Id == id) return child;
             }
@@ -822,7 +1263,7 @@ namespace Crast.Accessor.SqlWrapper{
         /// <param name="childId"></param>
         /// <param name="targetSlot"></param>
         /// <returns></returns>
-        public SqlQueryElementRole? GetRoleById(SqlQuerySlotId childId, out SqlQuerySlotField? targetSlot){
+        internal SqlQueryElementRole? GetRoleById(SqlQuerySlotId childId, out SqlQuerySlotFieldAbstract? targetSlot){
             foreach (var (role, child) in IterateChildren()){
                 if (child.Id == childId){
                     targetSlot = child;
@@ -832,27 +1273,29 @@ namespace Crast.Accessor.SqlWrapper{
             targetSlot = null;
             return null;
         }
-
-        /// <summary>
-        /// 子要素を更新する処理の基底
-        /// </summary>
-        /// <remarks>
-        /// 子要素はroleによって異なる型になり得るので、非ジェネリックのこのメソッドはAlterではなく本メソッド。
-        /// </remarks>
-        /// <param name="draft"></param>
-        /// <param name="role"></param>
-        /// <param name="newNode"></param>
-        /// <returns></returns>
-        internal abstract SqlQueryElement? ReplaceChildByRole(SqlQueryDraft draft, SqlQueryElementRole role, SqlQuerySlotState newNode);
-
-        #region リスト型用 
-        //共変性の都合で、公開プロパティはIReadOnlyList<out T>(あるいは緩めてIEnumerable<out T>)にする必要がある。(内部フィールドはImmutableArrayにすべき。)
-        internal SqlQueryElement? AddChild(SqlQueryElementRole role, SqlQuerySlotState newNode) => AddChildren(role, [newNode]);
-        internal abstract SqlQueryElement? AddChildren(SqlQueryElementRole role, SqlQuerySlotState[] newNodes);
-        internal abstract SqlQueryElement? RemoveChildren(SqlQueryElementRole role, Byte count = 0);
         #endregion
 
-        internal virtual SqlQueryElement AdaptTo(SqlType targetDialect) => this;
+        #region 子スロットのIDを保ったまま中身を変更するReplace処理
+        /// <summary>
+        /// 子スロットのIDを保ったまま中身を変更するReplace処理
+        /// </summary>
+        internal virtual SqlQueryElement? ReplaceChildByRole(SqlQueryElementRole role, SqlQuerySlotStateAbstract state) => ReplaceChildrenByRole([(role,state)]);
+        /// <summary>
+        /// 子スロットのIDを保ったまま中身を変更するReplace処理
+        /// </summary>
+        internal virtual SqlQueryElement? ReplaceChildById(SqlQuerySlotId id, SqlQuerySlotStateAbstract state) => ReplaceChildrenById([(id, state)]);
+        /// <summary>
+        /// 子スロットのIDを保ったまま中身を変更するReplace処理
+        /// </summary>
+        internal abstract SqlQueryElement? ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states);
+        /// <summary>
+        /// 子スロットのIDを保ったまま中身を変更するReplace処理
+        /// </summary>
+        internal abstract SqlQueryElement? ReplaceChildrenById(IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states);
+        #endregion
+
+
+
 
     }
 

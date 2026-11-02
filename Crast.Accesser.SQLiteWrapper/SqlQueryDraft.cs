@@ -12,9 +12,9 @@ namespace Crast.Accessor.SqlWrapper{
     /// そのため、Slotの内部のElementに関わらず、親Elementが存在し続ける限り同じIDを維持する。
     /// </remarks>
     /// <param name="Value"></param>
-    public readonly record struct SqlQuerySlotId(int Value) {
+    public readonly record struct SqlQuerySlotId(UInt32 Value) {
         #region エレメントidの生成管理
-        private static readonly ConditionalWeakTable<SqlQueryDraft, StrongBox<int>> _draftCounters = [];
+        private static readonly ConditionalWeakTable<SqlQueryDraft, StrongBox<UInt32>> _draftCounters = [];
         public static SqlQuerySlotId GetNextId(SqlQueryDraft draft){
             var counter = _draftCounters.GetOrCreateValue(draft);
             return new SqlQuerySlotId(Interlocked.Increment(ref counter.Value));// スレッド安全性の担保
@@ -26,8 +26,8 @@ namespace Crast.Accessor.SqlWrapper{
     /// </summary>
     /// <remarks>
     /// </remarks>
-    /// <param name="Ids">structの値型比較のため、値型として扱われるImmutableArray<int>型を利用する。</param>
-    public record class SqlQueryPath(SqlQuerySlotId RootId, ImmutableArray<int> Ids){
+    /// <param name="Ids">structの値型比較のため、値型として扱われるImmutableArray<UInt32>型を利用する。</param>
+    public record class SqlQueryPath(SqlQuerySlotId RootId, ImmutableArray<UInt32> Ids){
         public int Length => Ids.Length;
         public bool IsRoot => Ids.Length == 0;
         public SqlQuerySlotId First => Ids.Length == 0 ? RootId : new(Ids[0]);
@@ -36,7 +36,7 @@ namespace Crast.Accessor.SqlWrapper{
         public SqlQueryPath AppendLeaf(params SqlQuerySlotId[] newNodes) {
             if (newNodes.Length == 0) return this;
 
-            int[] values = new int[newNodes.Length];
+            var values = new UInt32[newNodes.Length];
             for (var i = 0; i < newNodes.Length; i++) {
                 values[i] = newNodes[i].Value;
             }
@@ -47,7 +47,7 @@ namespace Crast.Accessor.SqlWrapper{
         public SqlQueryPath AppendRoot(params SqlQuerySlotId[] newNodes) {
             if (newNodes.Length == 0) return this;
 
-            int[] values = new int[newNodes.Length - 1];
+            var values = new UInt32[newNodes.Length - 1];
             for (var i = 0; i < newNodes.Length - 1; i++){
                 values[i] = newNodes[i + 1].Value;
             }
@@ -134,6 +134,12 @@ namespace Crast.Accessor.SqlWrapper{
             return new(RootId, [..Ids[..(p + 1)], ..child.Ids]);
         }
     }
+    /// <summary>
+    /// SqlQueryDraft内のSlotのパスを解決する際の結果を表すenum
+    /// </summary>
+    /// <remarks>
+    /// 解決不能ならInvalid、現在位置で解決済みならSelf、子要素に掘り進む必要があるならDescend
+    /// </remarks>
     public enum SqlQueryPathResolve{
         /// <summary> パスが無効、またはツリー構造と一致しないため処理不可 </summary>
         Invalid,
@@ -182,18 +188,20 @@ namespace Crast.Accessor.SqlWrapper{
     /// </summary>
     /// <remarks>
     /// 個々のエレメントもしくは枝に対する処理はPointer側に回す。
+    /// <br></br>
+    /// ID管理はSqlQuerySlotIdのstatic領域のConditionalWeakTableで行う。
     /// </remarks>
     public sealed class SqlQueryDraft{
-        private SqlQuerySlotField _root; // 不変レコードツリーの根本。
-        internal SqlQuerySlotField Root => Volatile.Read(ref _root); //クローンせずに参照をもらうためのプロパティ。
+        private SqlQuerySlotFieldAbstract _root; // 不変レコードツリーの根本。
+        internal SqlQuerySlotFieldAbstract Root => Volatile.Read(ref _root); //クローンせずに参照をもらうためのプロパティ。
         //Volatile.Readは、マルチスレッド最適化の下でも最新の値を確実に読み取るためのメソッド。
         //これにより、他のスレッドが更新した_rootの値を正しく取得できるようになる。
 
-        public SqlQueryDraft(SqlQuerySlotField root){
+        internal SqlQueryDraft(SqlQuerySlotFieldAbstract root){
             _root = root;
         }
         // Pointer側の各種Commitから呼ばれる、ルート差し替え専用の単一窓口
-        internal bool Apply(SqlQuerySlotField snapshot, SqlQuerySlotField newRoot){
+        internal bool Apply(SqlQuerySlotFieldAbstract snapshot, SqlQuerySlotFieldAbstract newRoot){
             return ReferenceEquals(
                 Interlocked.CompareExchange(ref _root, newRoot, snapshot),
                 snapshot
@@ -225,15 +233,15 @@ namespace Crast.Accessor.SqlWrapper{
         private SqlQueryPath? _path;
         public SqlQueryPath? Path { get { Reload(out var p); return p; } }
         public SqlQuerySlotId? Id => Volatile.Read(ref _path)?.Leaf;//_pathは変動するため、最新のキャッシュ値を保証する
-        public SqlQuerySlotField? Target => Reload(out _);
+        internal SqlQuerySlotFieldAbstract? Target => Reload(out _);
         public bool IsDisposed => Volatile.Read(ref _path) == null;//_pathは変動するため、最新のキャッシュ値を保証する
         public SqlQueryPointer(SqlQueryDraft draft, SqlQueryPath? path){
             _draft = draft;
             _path = path;
             if (path != null && draft.Root.GetSlotField(path) is null) _path = null;
         }
-        private SqlQuerySlotField EnsureValidSlot(out SqlQueryPath targetPath){
-            if (Reload(out var path) is not SqlQuerySlotField slot) throw new InvalidOperationException("このPointerは無効です。");
+        private SqlQuerySlotFieldAbstract EnsureValidSlot(out SqlQueryPath targetPath){
+            if (Reload(out var path) is not SqlQuerySlotFieldAbstract slot) throw new InvalidOperationException("このPointerは無効です。");
             targetPath = path!;
             return slot;
         }
@@ -244,9 +252,9 @@ namespace Crast.Accessor.SqlWrapper{
         /// ついでに更新後のスロットとパスを返す。
         /// </remarks>
         /// <returns></returns>
-        private SqlQuerySlotField? Reload(out SqlQueryPath? targetPath){
+        private SqlQuerySlotFieldAbstract? Reload(out SqlQueryPath? targetPath){
             //EnsureValid();//無効なPointerも存在までは許容するので、ここでは例外を投げない。
-            SqlQuerySlotField? targetSlot;
+            SqlQuerySlotFieldAbstract? targetSlot;
             while (true) {
                 //スナップショットの確保
                 var currentRoot = _draft.Root;
@@ -257,7 +265,7 @@ namespace Crast.Accessor.SqlWrapper{
                 }
                 targetPath = currentPath;
 
-                if (currentRoot.GetSlotField(currentPath) is SqlQuerySlotField e){
+                if (currentRoot.GetSlotField(currentPath) is SqlQuerySlotFieldAbstract e){
                     //Pathの有効確認
                     targetSlot = e;
                 } else if (currentRoot.GetPathById(currentPath.Leaf, out var target) is SqlQueryPath p){
@@ -292,7 +300,7 @@ namespace Crast.Accessor.SqlWrapper{
         /// </summary>
         /// <param name="newNode"></param>
         /// <returns></returns>
-        public SqlQueryPointerResult CommitReplace(SqlQuerySlotState newNode){
+        public SqlQueryPointerResult CommitReplace(SqlQuerySlotStateAbstract newNode){
             // 1. 先頭でReloadし、このスレッドが確認した時点の「初期パス」を確実に固定する
             var targetSlot = Reload(out var targetPath);
             if (targetSlot is null || targetPath is null) return SqlQueryPointerResult.TargetVanished;
@@ -326,7 +334,7 @@ namespace Crast.Accessor.SqlWrapper{
 
                 //スナップショットを置換したツリーを作成。
                 //スナップショットに対してPathが存在することは確定しているが、一応ヌルチェックはする。
-                if (currentRoot.ReplaceRecursive(_draft, path, addedNode) is not SqlQuerySlotField newRoot) throw new InvalidOperationException("クエリツリーの更新が想定外の理由で失敗しました");
+                if (currentRoot.ReplaceRecursive(_draft, path, addedNode) is not SqlQuerySlotFieldAbstract newRoot) throw new InvalidOperationException("クエリツリーの更新が想定外の理由で失敗しました");
 
 
                 //確定要求（CAS）
@@ -345,7 +353,7 @@ namespace Crast.Accessor.SqlWrapper{
         /// <param name="newNode"></param>
         /// <param name="overwriteDefault">Defaultのスロットでも上書きするかどうか</param>
         /// <returns></returns>
-        public SqlQueryPointerResult CommitFill(SqlQuerySlotState newNode, bool overwriteDefault){
+        public SqlQueryPointerResult CommitFill(SqlQuerySlotStateAbstract newNode, bool overwriteDefault){
             // 1. 先頭でReloadし、このスレッドが確認した時点の「初期パス」を確実に固定する
             var targetSlot = Reload(out var targetPath);
             if (targetSlot is null || targetPath is null) return SqlQueryPointerResult.TargetVanished;
@@ -359,8 +367,8 @@ namespace Crast.Accessor.SqlWrapper{
 
                 //スナップショットを基準に対象エレメントのパスを更新
                 var path = currentPath;
-                SqlQuerySlotField target;
-                if (currentRoot.GetSlotField(currentPath) is SqlQuerySlotField t1){
+                SqlQuerySlotFieldAbstract target;
+                if (currentRoot.GetSlotField(currentPath) is SqlQuerySlotFieldAbstract t1){
                     //元のpathで問題ない場合
                     target = t1;
                 } else if (currentRoot.GetPathById(currentPath.Leaf, out var t2) is SqlQueryPath p) {
@@ -386,7 +394,7 @@ namespace Crast.Accessor.SqlWrapper{
 
                 //スナップショットを置換したツリーを作成。
                 //スナップショットに対してPathが存在することは確定しているが、一応ヌルチェックはする。
-                if (currentRoot.ReplaceRecursive(_draft, path, addedNode) is not SqlQuerySlotField newRoot) throw new InvalidOperationException("クエリツリーの更新が想定外の理由で失敗しました");
+                if (currentRoot.ReplaceRecursive(_draft, path, addedNode) is not SqlQuerySlotFieldAbstract newRoot) throw new InvalidOperationException("クエリツリーの更新が想定外の理由で失敗しました");
 
 
                 //確定要求（CAS）
@@ -416,8 +424,8 @@ namespace Crast.Accessor.SqlWrapper{
 
                 //スナップショットを基準に対象エレメントのパスを更新
                 var path = currentPath;
-                SqlQuerySlotField target;
-                if (currentRoot.GetSlotField(currentPath) is SqlQuerySlotField t1){
+                SqlQuerySlotFieldAbstract target;
+                if (currentRoot.GetSlotField(currentPath) is SqlQuerySlotFieldAbstract t1){
                     //元のpathで問題ない場合
                     target = t1;
                 } else if (currentRoot.GetPathById(currentPath.Leaf, out var t2) is SqlQueryPath p){
@@ -444,7 +452,7 @@ namespace Crast.Accessor.SqlWrapper{
 
                 //スナップショットを置換したツリーを作成。
                 //スナップショットに対してPathが存在することは確定しているが、一応ヌルチェックはする。
-                if (currentRoot.ReplaceRecursive(_draft, path, addedNode) is not SqlQuerySlotField newRoot) throw new InvalidOperationException("クエリツリーの更新が想定外の理由で失敗しました");
+                if (currentRoot.ReplaceRecursive(_draft, path, addedNode) is not SqlQuerySlotFieldAbstract newRoot) throw new InvalidOperationException("クエリツリーの更新が想定外の理由で失敗しました");
 
 
                 //確定要求（CAS）
@@ -479,7 +487,7 @@ namespace Crast.Accessor.SqlWrapper{
 
                 //スナップショットを基準に対象エレメントのパスを更新
                 var path = currentPath;
-                if (currentRoot.GetSlotField(currentPath) is SqlQuerySlotField){
+                if (currentRoot.GetSlotField(currentPath) is SqlQuerySlotFieldAbstract){
                     //元のpathで問題ない場合
                 } else if (currentRoot.GetPathById(currentPath.Leaf, out _) is SqlQueryPath p){
                     //元のpathではないが該当IDのスロットが見つかった場合
@@ -494,10 +502,10 @@ namespace Crast.Accessor.SqlWrapper{
                 }
 
                 //スナップショットを基準に継ぎ先エレメントを取得
-                SqlQuerySlotField child;
+                SqlQuerySlotFieldAbstract child;
                 if (path.GetMergedPath(relativeChildPath, out _) is not SqlQueryPath absoluteChildPath) throw new ArgumentException("継ぎ先の相対Pathが現在位置から繋がらない");
 
-                if (currentRoot.GetSlotField(absoluteChildPath) is SqlQuerySlotField t1){
+                if (currentRoot.GetSlotField(absoluteChildPath) is SqlQuerySlotFieldAbstract t1){
                     //元のpathで問題ない場合
                     child = t1;
                 } else if (currentRoot.GetPathById(relativeChildPath.Leaf, out var t2) is not null){
@@ -518,7 +526,7 @@ namespace Crast.Accessor.SqlWrapper{
 
                 //スナップショットを置換したツリーを作成。
                 //スナップショットに対してPathが存在することは確定しているが、一応ヌルチェックはする。
-                if (currentRoot.ReplaceRecursive(_draft, path, addedNode) is not SqlQuerySlotField newRoot) throw new InvalidOperationException("クエリツリーの更新が想定外の理由で失敗しました");
+                if (currentRoot.ReplaceRecursive(_draft, path, addedNode) is not SqlQuerySlotFieldAbstract newRoot) throw new InvalidOperationException("クエリツリーの更新が想定外の理由で失敗しました");
 
 
                 //確定要求（CAS）
@@ -539,7 +547,7 @@ namespace Crast.Accessor.SqlWrapper{
         /// </remarks>
         /// <param name="relativeChildPath">挿入構造のこの位置に、対象ノードを継ぎ変える</param>
         /// <returns></returns>
-        public SqlQueryPointerResult CommitInsert(SqlQuerySlotField insertNodes, SqlQueryPath relativeChildPath){
+        public SqlQueryPointerResult CommitInsert(SqlQuerySlotFieldAbstract insertNodes, SqlQueryPath relativeChildPath){
             if (relativeChildPath.RootId != insertNodes.Id) throw new ArgumentException("継ぎ先位置の相対Pathが継ぎ先構造の根元から繋がらない");
             if (insertNodes.GetSelectorByPath(relativeChildPath, out _) is not SqlQuerySelector selector) throw new ArgumentException("継ぎ先位置の相対Pathに該当が無い");
             var insert = insertNodes.RecreateAlter(insertNodes.State.CloneNode(_draft));
@@ -559,8 +567,8 @@ namespace Crast.Accessor.SqlWrapper{
 
                 //スナップショットを基準に対象エレメントのパスを更新
                 var path = currentPath;
-                SqlQuerySlotField target;
-                if (currentRoot.GetSlotField(currentPath) is SqlQuerySlotField t1){
+                SqlQuerySlotFieldAbstract target;
+                if (currentRoot.GetSlotField(currentPath) is SqlQuerySlotFieldAbstract t1){
                     //元のpathで問題ない場合
                     target = t1;
                 } else if (currentRoot.GetPathById(currentPath.Leaf, out var t2) is SqlQueryPath p){
@@ -582,7 +590,7 @@ namespace Crast.Accessor.SqlWrapper{
 
                 //スナップショットを置換したツリーを作成。
                 //スナップショットに対してPathが存在することは確定しているが、一応ヌルチェックはする。
-                if (currentRoot.ReplaceRecursive(_draft, path, addedNode, false) is not SqlQuerySlotField newRoot) throw new InvalidOperationException("クエリツリーの更新が想定外の理由で失敗しました");
+                if (currentRoot.ReplaceRecursive(_draft, path, addedNode, false) is not SqlQuerySlotFieldAbstract newRoot) throw new InvalidOperationException("クエリツリーの更新が想定外の理由で失敗しました");
 
 
                 //確定要求（CAS）
@@ -638,9 +646,9 @@ namespace Crast.Accessor.SqlWrapper{
                 if (currentPath.IsRoot) return false; // ルートなら次の兄弟はいない
 
                 var parentPath = currentPath.RemoveLeaf();
-                SqlQuerySlotField parent;
+                SqlQuerySlotFieldAbstract parent;
 
-                if (currentRoot.GetSlotField(parentPath) is SqlQuerySlotField s1){
+                if (currentRoot.GetSlotField(parentPath) is SqlQuerySlotFieldAbstract s1){
                     //Pathの有効確認
                     parent = s1;
                 } else if (currentRoot.GetPathById(parentPath.Leaf, out var s2) is SqlQueryPath p){
@@ -658,7 +666,7 @@ namespace Crast.Accessor.SqlWrapper{
                 }
 
                 //親が持つ子要素をリスト化＋自身の位置を取得
-                List<SqlQuerySlotField> children = [];
+                List<SqlQuerySlotFieldAbstract> children = [];
                 int? pos = null;
                 int count = 0;
                 foreach (var (_, child) in parent.IterateChildren()){
@@ -693,9 +701,9 @@ namespace Crast.Accessor.SqlWrapper{
                 if (currentPath.IsRoot) return false; // ルートなら次の兄弟はいない
 
                 var parentPath = currentPath.RemoveLeaf();
-                SqlQuerySlotField parent;
+                SqlQuerySlotFieldAbstract parent;
 
-                if (currentRoot.GetSlotField(parentPath) is SqlQuerySlotField s1){
+                if (currentRoot.GetSlotField(parentPath) is SqlQuerySlotFieldAbstract s1){
                     //Pathの有効確認
                     parent = s1;
                 } else if (currentRoot.GetPathById(parentPath.Leaf, out var s2) is SqlQueryPath p){
@@ -713,7 +721,7 @@ namespace Crast.Accessor.SqlWrapper{
                 }
 
                 //親が持つ子要素をリスト化＋自身の位置を取得
-                List<SqlQuerySlotField> children = [];
+                List<SqlQuerySlotFieldAbstract> children = [];
                 int? pos = null;
                 int count = 0;
                 foreach (var (_, child) in parent.IterateChildren()){
@@ -746,10 +754,10 @@ namespace Crast.Accessor.SqlWrapper{
                 var currentPath = Volatile.Read(ref _path);
                 if (currentPath is null) return false;
                 var targetPath = currentPath;
-                SqlQuerySlotField target;
+                SqlQuerySlotFieldAbstract target;
                 SqlQueryPath childPath;
 
-                if (currentRoot.GetSlotField(targetPath) is SqlQuerySlotField s1){
+                if (currentRoot.GetSlotField(targetPath) is SqlQuerySlotFieldAbstract s1){
                     //Pathの有効確認
                     target = s1;
                 } else if (currentRoot.GetPathById(targetPath.Leaf, out var s2) is SqlQueryPath p){
@@ -765,7 +773,7 @@ namespace Crast.Accessor.SqlWrapper{
                     //子を持たないなら移動しない
                     return false;
                 }
-                if (target.GetChildById(id) is not SqlQuerySlotField child) return false;
+                if (target.GetChildById(id) is not SqlQuerySlotFieldAbstract child) return false;
                 childPath = targetPath.AppendLeaf(child.Id);
 
                 if (_draft.Root == currentRoot
@@ -782,10 +790,10 @@ namespace Crast.Accessor.SqlWrapper{
                 var currentPath = Volatile.Read(ref _path);
                 if (currentPath is null) return false;
                 var targetPath = currentPath;
-                SqlQuerySlotField target;
+                SqlQuerySlotFieldAbstract target;
                 SqlQueryPath childPath;
 
-                if (currentRoot.GetSlotField(targetPath) is SqlQuerySlotField s1){
+                if (currentRoot.GetSlotField(targetPath) is SqlQuerySlotFieldAbstract s1){
                     //Pathの有効確認
                     target = s1;
                 } else if (currentRoot.GetPathById(targetPath.Leaf, out var s2) is SqlQueryPath p){
@@ -801,7 +809,7 @@ namespace Crast.Accessor.SqlWrapper{
                     //子を持たないなら移動しない
                     return false;
                 }
-                if (target.GetChildByRole(role) is not SqlQuerySlotField child) return false;
+                if (target.GetChildByRole(role) is not SqlQuerySlotFieldAbstract child) return false;
                 childPath = targetPath.AppendLeaf(child.Id);
 
                 if (_draft.Root == currentRoot

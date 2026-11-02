@@ -1,12 +1,96 @@
 ﻿using Crast.Utilities.ExtensionMethods;
 using System.Collections.Immutable;
 using System.Text;
-using System.Linq;
-using System.Runtime.InteropServices;
 
 
 namespace Crast.Accessor.SqlWrapper{
     ///各エレメントの具象型及び比較的細かい抽象型をまとめたファイル。
+
+    //SqlQueryElement                                全ての基底
+    //├SqlQueryTriviaElement                        空白文字要素
+    //├SqlQueryTriviaList                           空白文字リスト
+    //└SqlQueryStructuralElement                    実文字要素
+    //　├SqlQueryStructuralList                     実文字リストの非ジェネリック抽象
+    //　│└SqlQueryStructuralList<TElement>         実文字リストのジェネリック具象
+    //　└SqlQueryStructuralSingleElement            単独実文字要素
+    //　　├SqlQuerySubElement                       非実体要素の非ジェネリック抽象
+    //　　│└SqlQuerySubElement<TElement>           非実体要素のジェネリック具象
+    //　　└SqlQueryRealElement                      SQL実体要素
+    //　　　├SqlQueryTokenElement                   実文字トークン
+    //　　　└SqlQueryNode                           実構造要素
+    //
+
+
+    internal static class ElementExtender {
+
+
+        #region ElementをStateに変換する、メソッドチェイン用の逆順処理
+        //継承過程のSubElementだけ処理が変わるため、細かく拡張メソッドを定義する。
+
+        /// <summary>
+        /// ElementをStateに変換する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <returns></returns>
+        internal static SqlQueryStructuralSlotState<T> WrapToEmptyState<T>(this SqlQuerySubElement<T> element)
+            where T : SqlQuerySubElement
+        {
+            return new(SqlQuerySlotStateEnum.Empty,null,element);
+        }
+        /// <summary>
+        /// ElementをStateに変換する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <returns></returns>
+        internal static SqlQueryStructuralSlotState<T> WrapToUndefinedState<T>(this SqlQuerySubElement<T> element)
+            where T : SqlQuerySubElement
+        {
+            return new(SqlQuerySlotStateEnum.Undefined, null, element);
+        }
+        /// <summary>
+        /// ElementをStateに変換する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <returns></returns>
+        internal static SqlQueryStructuralSlotState<T> WrapToDefaultState<T>(this SqlQuerySubElement<T> element)
+            where T : SqlQuerySubElement
+        {
+            return new(SqlQuerySlotStateEnum.Default, null, element);
+        }
+        /// <summary>
+        /// ElementをStateに変換する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <returns></returns>
+        internal static SqlQueryStructuralSlotState<T> WrapToNormalState<T,TElement>(this T element)
+            where T : SqlQueryStructuralList<TElement>
+            where TElement : SqlQueryStructuralElement
+        {
+            return new(SqlQuerySlotStateEnum.Normal, element,null);
+        }
+        /// <summary>
+        /// ElementをStateに変換する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <returns></returns>
+        internal static SqlQueryStructuralSlotState<T> WrapToNormalState<T>(this T element)
+            where T : SqlQueryRealElement
+        {
+            return new(SqlQuerySlotStateEnum.Normal, element, null);
+        }
+        /// <summary>
+        /// ElementをStateに変換する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <returns></returns>
+        internal static SqlQueryTriviaListSlotState WrapToNormalState(this SqlQueryTriviaList element){
+            return new(element);
+        }
+        /// <summary>
+        /// ElementをStateに変換する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <returns></returns>
+        internal static SqlQueryTriviaSlotState WrapToNormalState(this SqlQueryTriviaElement element){
+            return new(element);
+        }
+        #endregion
+
+    }
+
 
 
     #region 抽象型の定義の列挙
@@ -17,54 +101,109 @@ namespace Crast.Accessor.SqlWrapper{
     /// <remarks>
     /// 空白文字、改行文字、コメントを総称する親クラス。
     /// </remarks>
-    public abstract record SqlQueryTriviaElement : SqlQueryElement{
+    internal abstract record SqlQueryTriviaElement : SqlQueryElement{
         //子要素を持たないことで処理が確定するメソッドをsealedにして、派生クラスでのオーバーライドを禁止する。
-        public sealed override bool HasChild => false;
-        public sealed override bool HasChildNode => false;
-        public abstract TriviaType TriviaType { get; }
-        public sealed override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotField Slot)> IterateChildren() { yield break; }
+        internal sealed override bool HasChild => false;
+        internal sealed override bool HasChildNode => false;
+        internal abstract TriviaType TriviaType { get; }
+        internal sealed override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotFieldAbstract Slot)> IterateChildren() { yield break; }
         internal sealed override SqlQueryElement CloneNode(SqlQueryDraft draft) => this;
-        public abstract override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context);
+        internal abstract override SqlBuiltQueryFragmentText Build(SqlBuildContext context);
 
-        internal sealed override SqlQueryElement? ReplaceChildByRole(SqlQueryDraft draft, SqlQueryElementRole role, SqlQuerySlotState newNode) => throw new NotSupportedException("空白文字型ノードは子要素を持たない");
-        internal sealed override SqlQueryElement AddChildren(SqlQueryElementRole role, SqlQuerySlotState[] newNodes) => throw new NotSupportedException("空白文字型ノードは子要素を持たない");
-        internal sealed override SqlQueryElement RemoveChildren(SqlQueryElementRole role, Byte count = 0) => throw new NotSupportedException("空白文字型ノードは子要素を持たない");
+        internal sealed override SqlQueryElement? ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states) => throw new NotSupportedException("空白文字型ノードは子要素を持たない");
+        internal sealed override SqlQueryElement? ReplaceChildrenById(IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states) => throw new NotSupportedException("空白文字型ノードは子要素を持たない");
+
+        internal override SqlQueryTriviaElement AdaptTo(SqlType targetDialect) => this;
     }
     /// <summary>
     /// 実文字要素。前後にコメント含む空白文字を持てる。
     /// </summary>
-    public abstract record SqlQueryStructuralElement : SqlQueryElement{
-        public sealed override bool HasChild => true;
-        public SqlQuerySlotField<SqlQueryTriviaList> LeadingTrivia { get; }
-        public SqlQuerySlotField<SqlQueryTriviaList> TrailingTrivia { get; }
-        public SqlQueryStructuralElement(
-            SqlQuerySlotField<SqlQueryTriviaList> leadingTrivia,
-            SqlQuerySlotField<SqlQueryTriviaList> trailingTrivia
+    internal abstract record SqlQueryStructuralElement : SqlQueryElement{
+        internal sealed override bool HasChild => true;//前後の空白文字要素があるため、確定で子要素はある
+        internal SqlQueryTriviaListSlotField LeadingTrivia { get; }
+        internal SqlQueryTriviaListSlotField TrailingTrivia { get; }
+        //コンストラクタ
+        internal SqlQueryStructuralElement(
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
             ){
             LeadingTrivia = leadingTrivia;
             TrailingTrivia = trailingTrivia;
         }
-        public abstract override SqlBuiltQueryFragmentNode Build(SqlBuildContext context);
+
+        //Fieldの置き換えは具象型のコンストラクタを呼ぶしかない
+        internal abstract SqlQueryStructuralElement ReplaceTriviaByField(
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
+            );
+        
+        internal virtual SqlQueryStructuralElement ReplaceTriviaByState(SqlQueryTriviaListSlotState leadingTrivia, SqlQueryTriviaListSlotState trailingTrivia) {
+            var result = ReplaceChildrenByRole(
+                [
+                (SqlQueryElementRole.Trivia(0), leadingTrivia),
+                (SqlQueryElementRole.Trivia(1), trailingTrivia)
+                ]
+                );
+            //空白文字スロットは絶対にあるからnullが返ることは無い。
+            if (result is not SqlQueryStructuralElement se) throw new NotImplementedException("StructuralElementのReplaceメソッドからStructuralElementではない型が返る異常事態。");
+            return se;
+        }
+        internal virtual SqlQueryStructuralElement ReplaceTriviaByElement(SqlQueryTriviaList leadingTrivia, SqlQueryTriviaList trailingTrivia){
+            return ReplaceTriviaByState(
+                SqlQueryTriviaListSlotState.CreateNormal(leadingTrivia),
+                SqlQueryTriviaListSlotState.CreateNormal(trailingTrivia)
+                );
+        }
+
     }
     /// <summary>
-    /// 実文字子要素を持たない、分割不可の文字列要素。キーワードや識別子、リテラル値など。
+    /// 単独実文字要素。実文字リスト型を除いた実文字要素全ての基底。
     /// </summary>
-    public abstract record SqlQueryTokenElement : SqlQueryStructuralElement{
-        public sealed override bool HasChildNode => false;
-        public SqlQueryTokenElement(
-            SqlQuerySlotField<SqlQueryTriviaList> leadingTrivia,
-            SqlQuerySlotField<SqlQueryTriviaList> trailingTrivia
+    /// <remarks>
+    /// Buildの返り値型がSqlBuiltQueryFragmentNodeに確定する世代
+    /// </remarks>
+    internal abstract record SqlQueryStructuralSingleElement: SqlQueryStructuralElement{
+        //コンストラクタ
+        internal SqlQueryStructuralSingleElement(
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
+            )
+            : base(leadingTrivia,trailingTrivia)
+        {
+        }
+        internal abstract override SqlBuiltQueryFragmentNode Build(SqlBuildContext context);
+        internal abstract override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context);
+}
+    /// <summary>
+    /// SQL実体要素。空白文字・リスト層・代用Elementのようなツリーの形式上必要なものではなく、SQLクエリの内容を決定するのに関係する要素。
+    /// </summary>
+    internal abstract record SqlQueryRealElement : SqlQueryStructuralElement {
+        internal SqlQueryRealElement(
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
             ) : base(leadingTrivia, trailingTrivia)
         {
         }
     }
     /// <summary>
-    /// SQLクエリ構造の一般的な要素。文、句、式など。基本的に子要素を持つ。
+    /// 実文字子要素を持たない、分割不可の文字列要素。キーワードや識別子、リテラル値など。
     /// </summary>
-    public abstract record SqlQueryNode : SqlQueryStructuralElement{
-        public SqlQueryNode(
-            SqlQuerySlotField<SqlQueryTriviaList> leadingTrivia,
-            SqlQuerySlotField<SqlQueryTriviaList> trailingTrivia
+    internal abstract record SqlQueryTokenElement : SqlQueryRealElement{
+        internal sealed override bool HasChildNode => false;
+        internal SqlQueryTokenElement(
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
+            ) : base(leadingTrivia, trailingTrivia)
+        {
+        }
+    }
+    /// <summary>
+    /// SQLクエリ構造の一般的な非末端要素。文、句、式など。基本的に子実文字要素を持つ。
+    /// </summary>
+    internal abstract record SqlQueryNode : SqlQueryRealElement{
+        internal SqlQueryNode(
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
             ) : base(leadingTrivia, trailingTrivia)
         {
         }
@@ -72,10 +211,10 @@ namespace Crast.Accessor.SqlWrapper{
     /// <summary>
     /// 実行可能なSQLクエリ構造の基底。
     /// </summary>
-    public abstract record SqlQueryStatement : SqlQueryNode{
-        public SqlQueryStatement(
-            SqlQuerySlotField<SqlQueryTriviaList> leadingTrivia,
-            SqlQuerySlotField<SqlQueryTriviaList> trailingTrivia
+    internal abstract record SqlQueryStatement : SqlQueryNode{
+        internal SqlQueryStatement(
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
             ) : base(leadingTrivia, trailingTrivia)
         {
         }
@@ -83,10 +222,10 @@ namespace Crast.Accessor.SqlWrapper{
     /// <summary>
     /// 実行不能なSQLクエリ構造の基底。
     /// </summary>
-    public abstract record SqlQueryFragment : SqlQueryNode{
-        public SqlQueryFragment(
-            SqlQuerySlotField<SqlQueryTriviaList> leadingTrivia,
-            SqlQuerySlotField<SqlQueryTriviaList> trailingTrivia
+    internal abstract record SqlQueryFragment : SqlQueryNode{
+        internal SqlQueryFragment(
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
             ) : base(leadingTrivia, trailingTrivia)
         {
         }
@@ -94,12 +233,140 @@ namespace Crast.Accessor.SqlWrapper{
 
     #endregion
 
+    #region 代用Element
+
+    internal abstract record SqlQuerySubElement : SqlQueryStructuralSingleElement{
+        internal sealed override bool HasChildNode => false;
+        //コンストラクタ
+        internal SqlQuerySubElement(
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
+            )
+            :base(leadingTrivia, trailingTrivia)
+        {
+        }
+
+        #region Build関連
+        /// <summary>
+        /// 実行用のクエリを構築する処理。
+        /// </summary>
+        /// <param name="context"></param>
+        /// <returns></returns>
+        internal override SqlBuiltQueryFragmentNode Build(SqlBuildContext context){
+            if (LeadingTrivia.Build(context) is not SqlBuiltQueryFragmentText lt) throw new NotSupportedException("空白文字リストのBuild結果がSqlBuiltQueryFragmentTextではない異常事態。");
+            if (TrailingTrivia.Build(context) is not SqlBuiltQueryFragmentText tt) throw new NotSupportedException("空白文字リストのBuild結果がSqlBuiltQueryFragmentTextではない異常事態。");
+            return new SqlBuiltQueryFragmentNode(lt,null,tt);
+        }
+        /// <summary>
+        /// 人間用のクエリ構造図を構築する処理。
+        /// </summary>
+        /// <param name="context"></param>
+        /// <returns></returns>
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
+            throw new NotSupportedException();
+        }
+        #endregion
+
+        internal override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotFieldAbstract Slot)> IterateChildren(){
+            yield return (new SqlQueryElementRole(SqlQueryElementRoleEnum.Trivia, 0), LeadingTrivia);
+            yield return (new SqlQueryElementRole(SqlQueryElementRoleEnum.Trivia, 1), TrailingTrivia);
+        }
+
+    }
+    internal sealed record SqlQuerySubElement<TElement> : SqlQuerySubElement where TElement : SqlQueryElement{
+        //コンストラクタ
+        internal SqlQuerySubElement(
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
+            ) : base(leadingTrivia, trailingTrivia)
+        {
+        }
+
+        #region ファクトリ
+        internal static SqlQuerySubElement<TElement> CreateNull(SqlQueryDraft draft){
+            return new SqlQuerySubElement<TElement>(
+                new SqlQueryTriviaListSlotField(
+                    SqlQuerySlotId.GetNextId(draft),
+                    SqlQuerySlotCapabilities.OnlyNormal,
+                    SqlQueryTriviaListSlotState.CreateNormal(SqlQueryTriviaList.CreateFrom0())
+                    ),
+                new SqlQueryTriviaListSlotField(
+                    SqlQuerySlotId.GetNextId(draft), 
+                    SqlQuerySlotCapabilities.OnlyNormal,
+                    SqlQueryTriviaListSlotState.CreateNormal(SqlQueryTriviaList.CreateFrom0())
+                    )
+            );
+        }
+        #endregion
+
+        internal override SqlQuerySubElement<TElement> CloneNode(SqlQueryDraft draft){
+            return new SqlQuerySubElement<TElement>(
+                new SqlQueryTriviaListSlotField(SqlQuerySlotId.GetNextId(draft), SqlQuerySlotCapabilities.OnlyNormal, LeadingTrivia.State.CloneNode(draft)),
+                new SqlQueryTriviaListSlotField(SqlQuerySlotId.GetNextId(draft), SqlQuerySlotCapabilities.OnlyNormal, TrailingTrivia.State.CloneNode(draft))
+            );
+        }
+
+        #region 自身と子スロットのID固定で子スロット内のStateを変更するRePlace処理
+        internal override SqlQuerySubElement<TElement>? ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states){
+            var leadingTrivia = LeadingTrivia;
+            var trailingTrivia = TrailingTrivia;
+            foreach (var (role, state) in states) {
+                if (role.Name != SqlQueryElementRoleEnum.Trivia) return null;
+                if (state is not SqlQueryTriviaListSlotState tl) return null;
+                switch (role.Index) {
+                    case 0:
+                        leadingTrivia = leadingTrivia.ReplaceState(tl);
+                        break;
+                    case 1:
+                        trailingTrivia = trailingTrivia.ReplaceState(tl);
+                        break;
+                    default:
+                        return null;
+                }
+            }
+            return new SqlQuerySubElement<TElement>(leadingTrivia, trailingTrivia);
+        }
+        internal override SqlQuerySubElement<TElement>? ReplaceChildrenById(IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states){
+            var leadingTrivia = LeadingTrivia;
+            var trailingTrivia = TrailingTrivia;
+            foreach (var (id, state) in states){
+                if (state is not SqlQueryTriviaListSlotState tl) return null;
+                
+                if (id == LeadingTrivia.Id) leadingTrivia = leadingTrivia.ReplaceState(tl);
+                else if (id == TrailingTrivia.Id) trailingTrivia = trailingTrivia.ReplaceState(tl);
+                else return null;
+            }
+            return new SqlQuerySubElement<TElement>(leadingTrivia, trailingTrivia);
+        }
+        internal override SqlQuerySubElement<TElement> ReplaceTriviaByField(SqlQueryTriviaListSlotField leadingTrivia, SqlQueryTriviaListSlotField trailingTrivia){
+            return new SqlQuerySubElement<TElement>(leadingTrivia, trailingTrivia);
+        }
+        internal override SqlQuerySubElement<TElement> ReplaceTriviaByState(SqlQueryTriviaListSlotState leadingTrivia, SqlQueryTriviaListSlotState trailingTrivia){
+            var result = ReplaceChildrenByRole(
+                [
+                (SqlQueryElementRole.Trivia(0), leadingTrivia),
+                (SqlQueryElementRole.Trivia(1), trailingTrivia)
+                ]
+                )!;
+            return result;
+        }
+        internal override SqlQuerySubElement<TElement> ReplaceTriviaByElement(SqlQueryTriviaList leadingTrivia, SqlQueryTriviaList trailingTrivia){
+            return ReplaceTriviaByState(
+                SqlQueryTriviaListSlotState.CreateNormal(leadingTrivia),
+                SqlQueryTriviaListSlotState.CreateNormal(trailingTrivia)
+                );
+        }
+        #endregion
+    }
+    #endregion
+
+
     #region Trivia要素の定義
 
     /// <summary>
     /// 空白文字のうち、水平空白文字（スペースやタブ）を表す抽象クラス。
     /// </summary>
-    public abstract record SqlQueryHorizontalWhitespace : SqlQueryTriviaElement{
+    internal abstract record SqlQueryHorizontalWhitespace : SqlQueryTriviaElement{
     }
     /// <summary>
     /// 空白文字のうち、半角スペースを表す具象クラス。
@@ -108,18 +375,20 @@ namespace Crast.Accessor.SqlWrapper{
     /// count=0の場合は、ビルド時にcontext.Options.DefaultSpaceを使用する。
     /// </remarks>
     /// <param name="Count"></param>
-    public sealed record SqlQuerySpaceElement(byte Count = 0) : SqlQueryHorizontalWhitespace{
-        public override TriviaType TriviaType { get; } = TriviaType.Space;
-        public static SqlQuerySpaceElement Create(byte count = 0){
+    internal sealed record SqlQuerySpaceElement(byte Count = 0) : SqlQueryHorizontalWhitespace{
+        internal override TriviaType TriviaType { get; } = TriviaType.Space;
+        internal static SqlQuerySpaceElement Create(byte count = 0){
             return new SqlQuerySpaceElement(count);
         }
-        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
-            return new SqlBuiltQueryFragmentTrivia(
-                new SqlQueryFragmentConditions(),
-                Count == 0 ? context.Options.DefaultSpace : new string(' ', Count)
+        internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
+            return new SqlBuiltQueryFragmentText(
+                main : Count == 0 ? context.Options.DefaultSpace : new string(' ', Count),
+                before : new SqlQueryFragmentConditions(Space : RequiredStatus.Satisfied),
+                after : new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
+                TriviaOnly : true
                 );
         }
-        public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             var valueStr = Count == 0 ? "[スペース:デフォルト]" : $"[スペース:×{Count}]";
             return new([valueStr]);
         }
@@ -131,18 +400,20 @@ namespace Crast.Accessor.SqlWrapper{
     /// count=0の場合は、ビルド時にcontext.Options.DefaultTabを使用する。
     /// </remarks>
     /// <param name="Count"></param>
-    public sealed record SqlQueryTabElement(byte Count = 0) : SqlQueryHorizontalWhitespace{
-        public override TriviaType TriviaType { get; } = TriviaType.Space;
-        public static SqlQueryTabElement Create(byte count = 0){
+    internal sealed record SqlQueryTabElement(byte Count = 0) : SqlQueryHorizontalWhitespace{
+        internal override TriviaType TriviaType { get; } = TriviaType.Space;
+        internal static SqlQueryTabElement Create(byte count = 0){
             return new SqlQueryTabElement(count);
         }
-        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
-            return new SqlBuiltQueryFragmentTrivia(
-                new SqlQueryFragmentConditions(),
-                Count == 0 ? context.Options.DefaultTab : new string('\t', Count)
+        internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
+            return new SqlBuiltQueryFragmentText(
+                main : Count == 0 ? context.Options.DefaultTab : new string('\t', Count),
+                before: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
+                after: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
+                TriviaOnly: true
             );
         }
-        public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             var valueStr = Count == 0 ? "[タブ:デフォルト]" : $"[タブ:×{Count}]";
             return new([valueStr]);
         }
@@ -154,21 +425,26 @@ namespace Crast.Accessor.SqlWrapper{
     /// count=0の場合は、ビルド時にcontext.Options.DefaultNewlineを使用する。
     /// </remarks>
     /// <param name="Count"></param>
-    public sealed record SqlQueryNewlineElement(byte Count = 0) : SqlQueryTriviaElement{
-        public override TriviaType TriviaType { get; } = TriviaType.Newline;
-        public static SqlQueryNewlineElement Create(byte count = 0){
+    internal sealed record SqlQueryNewlineElement(byte Count = 0) : SqlQueryTriviaElement{
+        internal override TriviaType TriviaType { get; } = TriviaType.Newline;
+        internal static SqlQueryNewlineElement Create(byte count = 0){
             return new SqlQueryNewlineElement(count);
         }
-        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
-            return new SqlBuiltQueryFragmentTrivia(
+        internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
+            return new SqlBuiltQueryFragmentText(
+                Count == 0 ? context.Options.DefaultNewline : new string(context.Options.NewlineChar, Count),
                 new SqlQueryFragmentConditions(
-                    StartWithNewline: RequiredStatus.Satisfied,
-                    EndWithNewline: RequiredStatus.Satisfied
+                    Newline: RequiredStatus.Satisfied,
+                    Space: RequiredStatus.Satisfied
                     ),
-                Count == 0 ? context.Options.DefaultNewline : new string(context.Options.NewlineChar, Count)
+                new SqlQueryFragmentConditions(
+                    Newline: RequiredStatus.Satisfied,
+                    Space: RequiredStatus.Satisfied
+                    ),
+                TriviaOnly: true
             );
         }
-        public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             var valueStr = Count == 0 ? "[改行:デフォルト]" : $"[改行:×{Count}]";
             return new([valueStr]);
         }
@@ -177,65 +453,75 @@ namespace Crast.Accessor.SqlWrapper{
     /// 空白文字のうち、コメントを表す抽象クラス。
     /// </summary>
     /// <param name="Value"></param>
-    public abstract record SqlQueryCommentElement(string Value) : SqlQueryTriviaElement { }
+    internal abstract record SqlQueryCommentElement(string Value) : SqlQueryTriviaElement { }
     /// <summary>
     /// 空白文字のうち、ブロックコメントを表す具象クラス。
     /// </summary>
-    public sealed record SqlQueryBlockCommentElement : SqlQueryCommentElement{
-        public override TriviaType TriviaType { get; } = TriviaType.Comment;
+    internal sealed record SqlQueryBlockCommentElement : SqlQueryCommentElement{
+        internal override TriviaType TriviaType { get; } = TriviaType.Comment;
         private SqlQueryBlockCommentElement(string value) : base(value){ }
-        public static SqlQueryBlockCommentElement Create(string value){
+        internal static SqlQueryBlockCommentElement Create(string value){
             return new SqlQueryBlockCommentElement(value);
         }
-        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
-            return new SqlBuiltQueryFragmentTrivia(new SqlQueryFragmentConditions(), $"/*{Value}*/");
+        internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
+            return new SqlBuiltQueryFragmentText(
+                $"/*{Value}*/",
+                before: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
+                after: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
+                TriviaOnly: true
+                );
         }
-        public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             return new([$"[コメント] : {Value}"]);
         }
     }
     /// <summary>
     /// 空白文字のうち、行コメントを表す抽象クラス。
     /// </summary>
-    public abstract record SqlQueryLineCommentElement : SqlQueryCommentElement{
-        public SqlQueryLineCommentElement(string value) : base(value) { }
+    internal abstract record SqlQueryLineCommentElement : SqlQueryCommentElement{
+        internal SqlQueryLineCommentElement(string value) : base(value) { }
     }
     /// <summary>
     /// 空白文字のうち、通常の行コメントを表す具象クラス。`--`で始まる形式。
     /// </summary>
-    public sealed record SqlQueryDoubleDashCommentElement : SqlQueryLineCommentElement{
-        public override TriviaType TriviaType { get; } = TriviaType.Comment;
-        public SqlQueryDoubleDashCommentElement(string value) : base(value) { }
-        public static SqlQueryDoubleDashCommentElement Create(string value){
+    internal sealed record SqlQueryDoubleDashCommentElement : SqlQueryLineCommentElement{
+        internal override TriviaType TriviaType { get; } = TriviaType.Comment;
+        internal SqlQueryDoubleDashCommentElement(string value) : base(value) { }
+        internal static SqlQueryDoubleDashCommentElement Create(string value){
             return new SqlQueryDoubleDashCommentElement(value);
         }
-        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
-            return new SqlBuiltQueryFragmentTrivia(
-                new SqlQueryFragmentConditions(
-                    EndWithNewline: RequiredStatus.Unsatisfied
-                ),
-                $"--{Value}"
-            );
+        internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
+            return new SqlBuiltQueryFragmentText(
+                $"--{Value}",
+                before: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
+                after: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied, Newline: RequiredStatus.Unsatisfied),
+                TriviaOnly: true
+                );
         }
-        public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             return new([$"[行コメント] : {Value}"]);
         }
     }
     /// <summary>
     /// 空白文字のうち、ハッシュコメントを表す具象クラス。`#`で始まる形式。MySQLなど一部の方言でのみ有効。
     /// </summary>
-    public sealed record SqlQueryHashCommentElement : SqlQueryLineCommentElement{
-        public override SqlType SafeType { get; } = SqlType.MySQL;//Allでないエレメントでのみ上書きする。
-        public override TriviaType TriviaType { get; } = TriviaType.Comment;
+    internal sealed record SqlQueryHashCommentElement : SqlQueryLineCommentElement{
+        internal override SqlType EnableType { get; } = SqlType.MySQL;//Allでないエレメントでのみ上書きする。
+        internal override TriviaType TriviaType { get; } = TriviaType.Comment;
 
-        public SqlQueryHashCommentElement(string value) : base(value) { }
-        public static SqlQueryHashCommentElement Create(string value){
+        internal SqlQueryHashCommentElement(string value) : base(value) { }
+        internal static SqlQueryHashCommentElement Create(string value){
             return new SqlQueryHashCommentElement(value);
         }
-        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
-            if (context.Dialect.Type.InFlag(SafeType)){
+        internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
+            if (context.Dialect.Type.InFlag(EnableType)){
                 //ハッシュコメントをそのまま出力可能な場合
-                return new SqlBuiltQueryFragmentTrivia($"#{Value}", NeedNewlineAfter: true);
+                return new SqlBuiltQueryFragmentText(
+                    $"#{Value}",
+                    before: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
+                    after: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied, Newline: RequiredStatus.Unsatisfied),
+                    TriviaOnly: true
+                    );
             } else {
                 //ハッシュコメント非対応の方言の場合、AlertPolicyに従って処理する
                 switch (context.Options.InvalidComments){
@@ -251,9 +537,9 @@ namespace Crast.Accessor.SqlWrapper{
                 }
             }
         }
-        public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             string[] fragment = [$"[ハッシュコメント] : {Value}"];
-            if (!context.Dialect.Type.InFlag(SafeType)){
+            if (!context.Dialect.Type.InFlag(EnableType)){
                 switch (context.Options.InvalidComments){
                     case AlertPolicy.AllowAndConvert:
                         //fragment = new[] {$"[行コメント] : {Values}"};
@@ -272,77 +558,634 @@ namespace Crast.Accessor.SqlWrapper{
             }
             return new(fragment, NeedNewlineAfter : true);
         }
-        internal override SqlQueryLineCommentElement AdaptTo(SqlType targetDialect) => targetDialect.InFlag(SafeType) ? this : new SqlQueryDoubleDashCommentElement(Value);
+        internal override SqlQueryLineCommentElement AdaptTo(SqlType targetDialect) => targetDialect.InFlag(EnableType) ? this : new SqlQueryDoubleDashCommentElement(Value);
     }
 
-    public sealed record SqlQueryTriviaList : SqlQueryElement{
+
+    #endregion
+
+    #region リスト要素の定義
+
+    internal abstract record SqlQueryStructuralList<TElement> : SqlQueryStructuralElement
+        where TElement : SqlQueryStructuralElement
+    {
         //リスト型の不定数子要素を受ける配列型フィールド
-        private readonly ImmutableArray<SqlQuerySlotField<SqlQueryTriviaElement>> _values;
-        public override bool HasChild => _values.Length > 0;
-        public sealed override bool HasChildNode => false;
+        protected readonly ImmutableArray<SqlQueryStructuralSlotField<TElement>> _values;
+        internal int Length => _values.Length;
+        internal override bool HasChildNode => _values.Length > 0;
+        internal int LeastCount { get; }
+
         //プライベートコンストラクタ
-        private SqlQueryTriviaList(SqlQuerySlotId[] ids, IReadOnlyList<SqlQuerySlotState<SqlQueryTriviaElement>> children){
-            var length = children.Count();
-            List<SqlQuerySlotField<SqlQueryTriviaElement>> values = [];
-            for (var i = 0; i < length; i++){
-                var slot =new SqlQuerySlotField<SqlQueryTriviaElement>(
-                        ids[i],
-                        SqlQuerySlotCapabilities.None,//空白文字リストにデフォルトや未定義は不要なので、CapabilitiesはNoneで良い。
-                        children[i]
-                );
-                values.Add(slot);
-            }
-            _values = [.. values];
+        protected SqlQueryStructuralList(
+            IEnumerable<SqlQueryStructuralSlotField<TElement>> values,
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia,
+            int leastCount
+            )
+            :base(leadingTrivia,trailingTrivia)
+        {
+            LeastCount = leastCount switch{
+                0 or 1 or 2 => leastCount,
+                _ => throw new ArgumentException("リスト要素の最低要素数は0か1か2のみ。")
+            };
+            _values = values
+                .Where(f=>f.IsNormal)
+                .ToImmutableArray();
+            if (Length < LeastCount) throw new ArgumentException($"List must contain at least {LeastCount} element.", nameof(values));
         }
         #region ファクトリメソッド
-        /// <summary>
-        /// 新しいIDと子要素で新たなクエリノードを作成する処理。
-        /// </summary>
-        /// <param name="draft"></param>
-        /// <param name="children"></param>
-        /// <returns></returns>
-        public static SqlQueryTriviaList Create(SqlQueryDraft draft, IReadOnlyList<SqlQuerySlotState<SqlQueryTriviaElement>> children){
-            //ちゃんとElementまで存在している物のみ子要素として扱う。
-            //Build時のShowTriviaでModeに確定でアクセスできるために必要。
-            List<SqlQuerySlotState<SqlQueryTriviaElement>> values = [];
-            foreach (var child in children){
-                if (!child.IsNormal) continue;
-                values.Add(child);
-            }
-            var ids = new SqlQuerySlotId[values.Count];
-            for (var i = 0; i < ids.Length; i++){
-                ids[i] = SqlQuerySlotId.GetNextId(draft);
-            }
-            return new SqlQueryTriviaList(ids, values);
+        //最終的な出力は各型で行うが、直前のSlotFields三つ組生成までは共通化できる。
+
+        private static SqlQueryTriviaListSlotField CreateTriviaSlotFromState(SqlQuerySlotId id, SqlQueryTriviaListSlotState state) {
+            return new SqlQueryTriviaListSlotField(id, SqlQuerySlotCapabilities.OnlyNormal, state);
         }
-        /// <summary>
-        /// 既存ノードのスロットIDを保持したまま、子要素を更新した新しいクエリノードを作成する処理。
-        /// </summary>
-        /// <param name="old"></param>
-        /// <param name="children"></param>
-        /// <returns></returns>
-        public static SqlQueryTriviaList Reload(SqlQueryTriviaList old, IReadOnlyList<SqlQuerySlotState<SqlQueryTriviaElement>> children){
-            //ちゃんとElementまで存在している物のみ子要素として扱う。
-            //Build時のShowTriviaでModeに確定でアクセスできるために必要。
-            List<SqlQuerySlotState<SqlQueryTriviaElement>> values = [];
-            foreach (var child in children){
-                if (!child.IsNormal) continue;
-                values.Add(child);
-            }
-            var ids = new SqlQuerySlotId[values.Count];
-            for (var i = 0; i < ids.Length; i++){
-                ids[i] = old._values[i].Id;
-            }
-            return new SqlQueryTriviaList(ids, values);
+        private static SqlQueryTriviaListSlotField CreateTriviaSlotFromElement(SqlQuerySlotId id, SqlQueryTriviaList element){
+            return new SqlQueryTriviaListSlotField(id, SqlQuerySlotCapabilities.OnlyNormal, SqlQueryTriviaListSlotState.CreateNormal(element));
+        }
+
+
+        public static (
+            IEnumerable<SqlQueryStructuralSlotField<TElement>> Values,
+            SqlQueryTriviaListSlotField LeadingTrivia,
+            SqlQueryTriviaListSlotField TrailingTrivia
+            )CreateFieldsFromIdAndState(
+                IEnumerable<(SqlQuerySlotId Id, SqlQueryStructuralSlotState<TElement> State)> values,
+                (SqlQuerySlotId Id, SqlQueryTriviaListSlotState State) leadingTrivia,
+                (SqlQuerySlotId Id, SqlQueryTriviaListSlotState State) trailingTrivia
+            )
+        {
+            return (Values : values
+                .Where(v => v.State.IsNormal)
+                .Select(v => new SqlQueryStructuralSlotField<TElement>(v.Id, SqlQuerySlotCapabilities.OnlyNormal, v.State)),
+                LeadingTrivia : CreateTriviaSlotFromState(leadingTrivia.Id, leadingTrivia.State),
+                TrailingTrivia : CreateTriviaSlotFromState(trailingTrivia.Id, trailingTrivia.State)
+                );
+        }
+        public static (
+            IEnumerable<SqlQueryStructuralSlotField<TElement>> Values,
+            SqlQueryTriviaListSlotField LeadingTrivia,
+            SqlQueryTriviaListSlotField TrailingTrivia
+            ) CreateFieldsFromIdAndElement(
+                IEnumerable<(SqlQuerySlotId Id, TElement Element)> values,
+                (SqlQuerySlotId Id, SqlQueryTriviaList Element) leadingTrivia,
+                (SqlQuerySlotId Id, SqlQueryTriviaList Element) trailingTrivia
+            )
+        {
+            return (Values : values.Select(
+                    v => new SqlQueryStructuralSlotField<TElement>(
+                        v.Id,
+                        SqlQuerySlotCapabilities.OnlyNormal,
+                        SqlQueryStructuralSlotState<TElement>.CreateNormal(v.Element)
+                    )
+                ),
+                LeadingTrivia: CreateTriviaSlotFromElement(leadingTrivia.Id, leadingTrivia.Element),
+                TrailingTrivia: CreateTriviaSlotFromElement(trailingTrivia.Id, trailingTrivia.Element)
+            );
+        }
+        public static (
+            IEnumerable<SqlQueryStructuralSlotField<TElement>> Values,
+            SqlQueryTriviaListSlotField LeadingTrivia,
+            SqlQueryTriviaListSlotField TrailingTrivia
+            ) CreateFieldsFromDraftAndState(
+                SqlQueryDraft draft,
+                IEnumerable<SqlQueryStructuralSlotState<TElement>> values,
+                SqlQueryTriviaListSlotState leadingTrivia,
+                SqlQueryTriviaListSlotState trailingTrivia
+            )
+        {
+            return (Values : values
+                .Where(state => state.IsNormal)
+                .Select(
+                    state => new SqlQueryStructuralSlotField<TElement>(
+                        SqlQuerySlotId.GetNextId(draft),
+                        SqlQuerySlotCapabilities.OnlyNormal,
+                        state
+                    )
+                ),
+                LeadingTrivia: CreateTriviaSlotFromState(SqlQuerySlotId.GetNextId(draft), leadingTrivia),
+                TrailingTrivia: CreateTriviaSlotFromState(SqlQuerySlotId.GetNextId(draft), trailingTrivia)
+                );
+        }
+        public static (
+            IEnumerable<SqlQueryStructuralSlotField<TElement>> Values,
+            SqlQueryTriviaListSlotField LeadingTrivia,
+            SqlQueryTriviaListSlotField TrailingTrivia
+            ) CreateFieldsFromDraftAndElement(
+                SqlQueryDraft draft,
+                IEnumerable<TElement> values,
+                SqlQueryTriviaList leadingTrivia,
+                SqlQueryTriviaList trailingTrivia
+            )
+        {
+            return (Values : values.Select(
+                element => new SqlQueryStructuralSlotField<TElement>(
+                    SqlQuerySlotId.GetNextId(draft),
+                    SqlQuerySlotCapabilities.OnlyNormal,
+                    SqlQueryStructuralSlotState<TElement>.CreateNormal(element)
+                )
+            ),
+                LeadingTrivia: CreateTriviaSlotFromElement(SqlQuerySlotId.GetNextId(draft), leadingTrivia),
+                TrailingTrivia: CreateTriviaSlotFromElement(SqlQuerySlotId.GetNextId(draft), trailingTrivia)
+            );
         }
         #endregion
 
-        public override SqlBuiltQueryFragmentTrivia Build(SqlBuildContext context){
+        internal sealed override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotFieldAbstract Slot)> IterateChildren() {
+            yield return (SqlQueryElementRole.Trivia(0), LeadingTrivia);
+            var ln = _values.Length;
+            for (var i = 0; i<ln; i++) {
+                yield return (SqlQueryElementRole.Listed(i), _values[i]);
+            }
+            yield return (SqlQueryElementRole.Trivia(1), TrailingTrivia);
+        }
+
+        //リスト型はRole.Indexがバグらないようにするための二段化で、文法機能が薄いため、リスト状態のFragmentのまま上に回して構成してもらう方がいい。
+        //つまり、FragmentListという別個の返り値型が要る。
+        #region 再帰処理
+        internal override SqlBuiltQueryFragmentNode Build(SqlBuildContext context){
+            throw new NotImplementedException();
+        }
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context)
+        {
+            throw new NotImplementedException();
+        }
+        internal override SqlQueryElement CloneNode(SqlQueryDraft draft)
+        {
+            throw new NotImplementedException();
+        }
+        #endregion
+
+        #region 子要素取得
+        //IterateChildrenするより楽っぽいのは個別実装。
+
+
+        internal override bool HasRole(SqlQueryElementRole role){
+            if (role.Name == SqlQueryElementRoleEnum.Trivia){
+                if (role.Index <= 1) return true;
+            } else if (role.Name == SqlQueryElementRoleEnum.Listed){
+                if (role.Index < Length) return true;
+            }
+            return false;
+        }
+        internal override SqlQuerySlotFieldAbstract? GetChildByRole(SqlQueryElementRole role){
+            if (role.Name == SqlQueryElementRoleEnum.Trivia){
+                if (role.Index == 0) return LeadingTrivia;
+                else if (role.Index == 1) return TrailingTrivia;
+            } else if (role.Name == SqlQueryElementRoleEnum.Listed){
+                if (role.Index < Length) return _values[role.Index];
+            }
+            return null;
+        }
+
+        #endregion
+
+        #region 自身と子スロットのID固定で子スロット内のStateを変更するRePlace処理
+        //最終的な出力は各具象型でしかできないが、その直前のvaluesの生成までは基底で共通処理にできる。
+
+
+        protected (
+            IEnumerable<SqlQueryStructuralSlotField<TElement>> Values,
+            SqlQueryTriviaListSlotField LeadingTrivia,
+            SqlQueryTriviaListSlotField TrailingTrivia
+            ) ReloadFieldsById(IEnumerable<(SqlQuerySlotId, SqlQuerySlotStateAbstract)> states) {
+            var newValues = _values.ToList();
+            var newLeadingTrivia = LeadingTrivia;
+            var newTrailingTrivia = TrailingTrivia;
+            foreach (var (id,state) in states) {
+                if (!state.IsNormal) throw new ArgumentException("リストの子要素に非実要素は入らない");
+
+                bool idExist = false;
+                if (state is SqlQueryTriviaListSlotState l){
+                    if (newLeadingTrivia.Id == id){
+                        newLeadingTrivia.ReplaceState(l);
+                        idExist = true;
+                    } else if (newTrailingTrivia.Id == id){
+                        newTrailingTrivia.ReplaceState(l);
+                        idExist = true;
+                    }
+                } else if (state is SqlQueryStructuralSlotState<TElement> e){
+                    for (var i2 = 0; i2 < newValues.Count; i2++){
+                        if (newValues[i2].Id == id){
+                            newValues[i2] = newValues[i2].ReplaceState(e);
+                            idExist = true;
+                            break;
+                        }
+                    }
+                } else {
+                    throw new ArgumentException("このリストの子要素でも前後の空白文字リストでもない型の要素が与えられている");
+                }
+
+                if (!idExist) throw new ArgumentException($"指定のIDのスロットが直下に存在しない：{id.Value}");
+            }
+            return (Values : newValues, LeadingTrivia : newLeadingTrivia, TrailingTrivia : newTrailingTrivia);
+        }
+        protected (
+            IEnumerable<SqlQueryStructuralSlotField<TElement>> Values,
+            SqlQueryTriviaListSlotField LeadingTrivia,
+            SqlQueryTriviaListSlotField TrailingTrivia
+            ) ReloadFieldsByRole(IEnumerable<(SqlQueryElementRole, SqlQuerySlotStateAbstract)> states){
+            var newValues = _values.ToList();
+            var newLeadingTrivia = LeadingTrivia;
+            var newTrailingTrivia = TrailingTrivia;
+            foreach (var (role, state) in states){
+                if (!state.IsNormal) throw new ArgumentException("リストの子要素に非実要素は入らない");
+
+                if (role.Name == SqlQueryElementRoleEnum.Trivia) {
+                    if (state is not SqlQueryTriviaListSlotState l) throw new ArgumentException("空白文字リストスロットに他の型が指定されている。");
+                    if (role.Index == 0) {
+                        newLeadingTrivia = newLeadingTrivia.ReplaceState(l);
+                        continue;
+                    } else if (role.Index == 1) {
+                        newTrailingTrivia = newTrailingTrivia.ReplaceState(l);
+                        continue;
+                    } else {
+                        throw new ArgumentOutOfRangeException($"空白文字リスト要素は前後二つしか存在しない。Index{role.Index}は指定できない。");
+                    }
+                } else if (role.Name == SqlQueryElementRoleEnum.Listed) {
+                    if (state is not SqlQueryStructuralSlotState<TElement> c) throw new ArgumentException($"{typeof(TElement)}型のリストに{state.GenericType}型の要素が渡されている。");
+                    if (role.Index >= newValues.Count) throw new ArgumentOutOfRangeException($"{newValues.Count}個のリストの{role.Index}番目に上書きしようとしている。");
+                    newValues[role.Index] = newValues[role.Index].ReplaceState(c);
+                    continue;
+                } else {
+                    throw new ArgumentException($"リストの子要素でも空白文字リストでも無い型が指定されている。");
+                }
+            }
+            return (Values : newValues, LeadingTrivia : newLeadingTrivia, TrailingTrivia : newTrailingTrivia);
+        }
+        #endregion
+
+        #region リスト型特有の挿入・削除処理
+
+        protected IEnumerable<SqlQueryStructuralSlotField<TElement>> ReloadChildrenWithAdded(SqlQueryDraft draft, ushort index, SqlQueryStructuralSlotState<TElement>[] states) {
+            if (index > Length) throw new ArgumentOutOfRangeException($"{Length}個のリストの{index}番目に挿入しようとしている");
+            return states
+                .Select(state => SqlQueryStructuralSlotField<TElement>.Create(draft,SqlQuerySlotCapabilities.OnlyNormal,state))
+                .LINQEmbed(index, _values);
+        }
+        protected IEnumerable<SqlQueryStructuralSlotField<TElement>> ReloadChildrenWithRemoved(ushort index, ushort count){
+            if (index >= Length) throw new ArgumentOutOfRangeException($"{Length}個のリストの{index}番目を削除しようとしている");
+            return _values.LINQWithout(index, count);
+        }
+
+        #endregion
+    }
+
+    internal sealed record SqlQueryStructuralListAllow0<TElement> : SqlQueryStructuralList<TElement>
+        where TElement : SqlQueryStructuralElement
+    {
+        //コンストラクタ
+        private SqlQueryStructuralListAllow0(
+            IEnumerable<SqlQueryStructuralSlotField<TElement>> values,
+                SqlQueryTriviaListSlotField leadingTrivia,
+                SqlQueryTriviaListSlotField trailingTrivia
+            ) : base(values,leadingTrivia,trailingTrivia,0) { }
+
+        #region ファクトリメソッド
+        internal static SqlQueryStructuralListAllow0<TElement> CreateFromIdAndState(
+                IEnumerable<(SqlQuerySlotId Id, SqlQueryStructuralSlotState<TElement> State)> values,
+                (SqlQuerySlotId Id, SqlQueryTriviaListSlotState State) leadingTrivia,
+                (SqlQuerySlotId Id, SqlQueryTriviaListSlotState State) trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromIdAndState(values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListAllow0<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        internal static SqlQueryStructuralListAllow0<TElement> CreateFromIdAndElement(
+                IEnumerable<(SqlQuerySlotId Id, TElement Element)> values,
+                (SqlQuerySlotId Id, SqlQueryTriviaList Element) leadingTrivia,
+                (SqlQuerySlotId Id, SqlQueryTriviaList Element) trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromIdAndElement(values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListAllow0<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        internal static SqlQueryStructuralListAllow0<TElement> CreateFromDraftAndState(
+                SqlQueryDraft draft,
+                IEnumerable<SqlQueryStructuralSlotState<TElement>> values,
+                SqlQueryTriviaListSlotState leadingTrivia,
+                SqlQueryTriviaListSlotState trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromDraftAndState(draft,values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListAllow0<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        internal static SqlQueryStructuralListAllow0<TElement> CreateFromDraftAndElement(
+                SqlQueryDraft draft,
+                IEnumerable<TElement> values,
+                SqlQueryTriviaList leadingTrivia,
+                SqlQueryTriviaList trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromDraftAndElement(draft, values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListAllow0<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        #endregion
+        #region 自身と子スロットのID固定で子スロット内のStateを変更するReplace処理
+        internal override SqlQueryStructuralListAllow0<TElement> ReplaceChildrenById(IEnumerable<(SqlQuerySlotId Id, SqlQuerySlotStateAbstract State)> states){
+            var fields = ReloadFieldsById(states);
+            return new(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        internal override SqlQueryStructuralListAllow0<TElement> ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotStateAbstract State)> states){
+            var fields = ReloadFieldsByRole(states);
+            return new(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        internal override SqlQueryStructuralListAllow0<TElement> ReplaceChildById(SqlQuerySlotId id, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenById([(id, state)]);
+        }
+        internal override SqlQueryStructuralListAllow0<TElement> ReplaceChildByRole(SqlQueryElementRole Role, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenByRole([(Role, state)]);
+        }
+        internal override SqlQueryStructuralListAllow0<TElement> ReplaceTriviaByField(SqlQueryTriviaListSlotField leadingTrivia, SqlQueryTriviaListSlotField trailingTrivia) {
+            return new SqlQueryStructuralListAllow0<TElement>(_values, leadingTrivia, trailingTrivia);
+        }
+        #endregion
+        #region リスト型特有の挿入・削除処理
+        internal SqlQueryStructuralListAllow0<TElement> PushChildren(SqlQueryDraft draft, SqlQueryStructuralSlotState<TElement>[] states) => AddChildren(draft, (ushort)Length, states);
+        internal SqlQueryStructuralListAllow0<TElement> AddChildren(SqlQueryDraft draft, ushort index, SqlQueryStructuralSlotState<TElement>[] states){
+            return new(
+                ReloadChildrenWithAdded(draft, index, states),
+                LeadingTrivia,
+                TrailingTrivia
+                );
+        }
+        internal SqlQueryStructuralListAllow0<TElement> RemoveChildren(ushort index, ushort count = 0) {
+            return new(
+                ReloadChildrenWithRemoved(index, count),
+                LeadingTrivia,
+                TrailingTrivia
+                );
+        }
+        #endregion
+
+        
+    }
+    internal sealed record SqlQueryStructuralListUpper1<TElement> : SqlQueryStructuralList<TElement>
+        where TElement : SqlQueryStructuralElement
+    {
+        //コンストラクタ
+        private SqlQueryStructuralListUpper1(
+            IEnumerable<SqlQueryStructuralSlotField<TElement>> values,
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
+            )
+            : base(values,leadingTrivia,trailingTrivia,1) {
+            if(Length < LeastCount) throw new ArgumentException("List must contain at least one element.", nameof(values));
+        }
+        #region ファクトリメソッド
+        internal static SqlQueryStructuralListUpper1<TElement> CreateFromIdAndState(
+                IEnumerable<(SqlQuerySlotId Id, SqlQueryStructuralSlotState<TElement> State)> values,
+                (SqlQuerySlotId Id, SqlQueryTriviaListSlotState State) leadingTrivia,
+                (SqlQuerySlotId Id, SqlQueryTriviaListSlotState State) trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromIdAndState(values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListUpper1<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        internal static SqlQueryStructuralListUpper1<TElement> CreateFromIdAndElement(
+                IEnumerable<(SqlQuerySlotId Id, TElement Element)> values,
+                (SqlQuerySlotId Id, SqlQueryTriviaList Element) leadingTrivia,
+                (SqlQuerySlotId Id, SqlQueryTriviaList Element) trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromIdAndElement(values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListUpper1<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        internal static SqlQueryStructuralListUpper1<TElement> CreateFromDraftAndState(
+                SqlQueryDraft draft,
+                IEnumerable<SqlQueryStructuralSlotState<TElement>> values,
+                SqlQueryTriviaListSlotState leadingTrivia,
+                SqlQueryTriviaListSlotState trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromDraftAndState(draft, values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListUpper1<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        internal static SqlQueryStructuralListUpper1<TElement> CreateFromDraftAndElement(
+                SqlQueryDraft draft,
+                IEnumerable<TElement> values,
+                SqlQueryTriviaList leadingTrivia,
+                SqlQueryTriviaList trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromDraftAndElement(draft, values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListUpper1<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        #endregion
+        #region 自身と子スロットのID固定で子スロット内のStateを変更するReplace処理
+        internal override SqlQueryStructuralListUpper1<TElement> ReplaceChildrenById(IEnumerable<(SqlQuerySlotId Id, SqlQuerySlotStateAbstract State)> states){
+            var fields = ReloadFieldsById(states);
+            return new(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        internal override SqlQueryStructuralListUpper1<TElement> ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotStateAbstract State)> states){
+            var fields = ReloadFieldsByRole(states);
+            return new(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        internal override SqlQueryStructuralListUpper1<TElement> ReplaceChildById(SqlQuerySlotId id, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenById([(id, state)]);
+        }
+        internal override SqlQueryStructuralListUpper1<TElement> ReplaceChildByRole(SqlQueryElementRole Role, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenByRole([(Role, state)]);
+        }
+        internal override SqlQueryStructuralListUpper1<TElement> ReplaceTriviaByField(SqlQueryTriviaListSlotField leadingTrivia, SqlQueryTriviaListSlotField trailingTrivia){
+            return new SqlQueryStructuralListUpper1<TElement>(_values, leadingTrivia, trailingTrivia);
+        }
+        #endregion
+        #region リスト型特有の挿入・削除処理
+        internal SqlQueryStructuralListUpper1<TElement> PushChildren(SqlQueryDraft draft, SqlQueryStructuralSlotState<TElement>[] states) => AddChildren(draft, (ushort)Length, states);
+        internal SqlQueryStructuralListUpper1<TElement> AddChildren(SqlQueryDraft draft, ushort index, SqlQueryStructuralSlotState<TElement>[] states){
+            return new(
+                ReloadChildrenWithAdded(draft, index, states),
+                LeadingTrivia,
+                TrailingTrivia
+                );
+        }
+        internal SqlQueryStructuralListUpper1<TElement> RemoveChildren(ushort index, ushort count = 0){
+            return new(
+                ReloadChildrenWithRemoved(index, count),
+                LeadingTrivia,
+                TrailingTrivia
+                );
+        }
+        #endregion
+    }
+    internal sealed record SqlQueryStructuralListUpper2<TElement> : SqlQueryStructuralList<TElement>
+        where TElement : SqlQueryStructuralElement
+    {
+        //コンストラクタ
+        private SqlQueryStructuralListUpper2(
+            IEnumerable<SqlQueryStructuralSlotField<TElement>> values,
+            SqlQueryTriviaListSlotField leadingTrivia,
+            SqlQueryTriviaListSlotField trailingTrivia
+            )
+            : base(values,leadingTrivia,trailingTrivia,2)
+        {
+            if (Length < LeastCount) throw new ArgumentException("List must contain at least one element.", nameof(values));
+        }
+        #region ファクトリメソッド
+        public static SqlQueryStructuralListUpper2<TElement> CreateFromIdAndState(
+                IEnumerable<(SqlQuerySlotId Id, SqlQueryStructuralSlotState<TElement> State)> values,
+                (SqlQuerySlotId Id, SqlQueryTriviaListSlotState State) leadingTrivia,
+                (SqlQuerySlotId Id, SqlQueryTriviaListSlotState State) trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromIdAndState(values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListUpper2<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        public static SqlQueryStructuralListUpper2<TElement> CreateFromIdAndElement(
+                IEnumerable<(SqlQuerySlotId Id, TElement Element)> values,
+                (SqlQuerySlotId Id, SqlQueryTriviaList Element) leadingTrivia,
+                (SqlQuerySlotId Id, SqlQueryTriviaList Element) trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromIdAndElement(values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListUpper2<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        public static SqlQueryStructuralListUpper2<TElement> CreateFromDraftAndState(
+                SqlQueryDraft draft,
+                IEnumerable<SqlQueryStructuralSlotState<TElement>> values,
+                SqlQueryTriviaListSlotState leadingTrivia,
+                SqlQueryTriviaListSlotState trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromDraftAndState(draft, values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListUpper2<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        public static SqlQueryStructuralListUpper2<TElement> CreateFromDraftAndElement(
+                SqlQueryDraft draft,
+                IEnumerable<TElement> values,
+                SqlQueryTriviaList leadingTrivia,
+                SqlQueryTriviaList trailingTrivia
+            )
+        {
+            var fields = CreateFieldsFromDraftAndElement(draft, values, leadingTrivia, trailingTrivia);
+            return new SqlQueryStructuralListUpper2<TElement>(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        #endregion
+
+        #region 自身と子スロットのID固定で子スロット内のStateを変更するReplace処理
+        internal override SqlQueryStructuralListUpper2<TElement> ReplaceChildrenById(IEnumerable<(SqlQuerySlotId Id, SqlQuerySlotStateAbstract State)> states){
+            var fields = ReloadFieldsById(states);
+            return new(fields.Values,fields.LeadingTrivia,fields.TrailingTrivia);
+        }
+        internal override SqlQueryStructuralListUpper2<TElement> ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotStateAbstract State)> states){
+            var fields = ReloadFieldsByRole(states);
+            return new(fields.Values, fields.LeadingTrivia, fields.TrailingTrivia);
+        }
+        internal override SqlQueryStructuralListUpper2<TElement> ReplaceChildById(SqlQuerySlotId id, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenById([(id,state)]);
+        }
+        internal override SqlQueryStructuralListUpper2<TElement> ReplaceChildByRole(SqlQueryElementRole Role, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenByRole([(Role, state)]);
+        }
+        internal override SqlQueryStructuralListUpper2<TElement> ReplaceTriviaByField(SqlQueryTriviaListSlotField leadingTrivia, SqlQueryTriviaListSlotField trailingTrivia){
+            return new SqlQueryStructuralListUpper2<TElement>(_values, leadingTrivia, trailingTrivia);
+        }
+
+        #endregion
+        #region リスト型特有の挿入・削除処理
+        internal SqlQueryStructuralListUpper2<TElement> PushChildren(SqlQueryDraft draft, SqlQueryStructuralSlotState<TElement>[] states) => AddChildren(draft, (ushort)Length, states);
+        internal SqlQueryStructuralListUpper2<TElement> AddChildren(SqlQueryDraft draft, ushort index, SqlQueryStructuralSlotState<TElement>[] states){
+            return new(
+                ReloadChildrenWithAdded(draft, index, states),
+                LeadingTrivia,
+                TrailingTrivia
+                );
+        }
+        internal SqlQueryStructuralListUpper2<TElement> RemoveChildren(ushort index, ushort count = 0){
+            return new(
+                ReloadChildrenWithRemoved(index, count),
+                LeadingTrivia,
+                TrailingTrivia
+                );
+        }
+        #endregion
+    }
+
+    internal sealed record SqlQueryTriviaList : SqlQueryElement{
+        //リスト型の不定数子要素を受ける配列型フィールド
+        private readonly ImmutableArray<SqlQueryTriviaSlotField> _values;
+        internal int Length => _values.Length;
+        internal override bool HasChild => _values.Length > 0;
+        internal sealed override bool HasChildNode => false;
+        //プライベートコンストラクタ
+        internal SqlQueryTriviaList(IEnumerable<SqlQueryTriviaSlotField> values){
+            _values = [..values];
+        }
+        #region ファクトリメソッド
+        internal static SqlQueryTriviaList CreateFromIdAndState(
+                IEnumerable<(SqlQuerySlotId Id, SqlQueryTriviaSlotState State)> values
+            )
+        {
+            var slotFields = values
+                .Where(v => v.State.IsNormal)
+                .Select(v => new SqlQueryTriviaSlotField(v.Id, SqlQuerySlotCapabilities.OnlyNormal, v.State))
+                ;
+            return new SqlQueryTriviaList(slotFields);
+        }
+        internal static SqlQueryTriviaList CreateFromIdAndElement(
+                IEnumerable<(SqlQuerySlotId Id, SqlQueryTriviaElement Element)> values
+            )
+        {
+            var slotFields = values.Select(
+                v => new SqlQueryTriviaSlotField(
+                    v.Id,
+                    SqlQuerySlotCapabilities.OnlyNormal,
+                    SqlQueryTriviaSlotState.CreateNormal(v.Element)
+                )
+            );
+            return new SqlQueryTriviaList(slotFields);
+        }
+        internal static SqlQueryTriviaList CreateFromDraftAndState(
+                SqlQueryDraft draft,
+                IEnumerable<SqlQueryTriviaSlotState> values
+            )
+        {
+            var slotFields = values
+                .Where(state => state.IsNormal)
+                .Select(
+                    state => new SqlQueryTriviaSlotField(
+                        SqlQuerySlotId.GetNextId(draft),
+                        SqlQuerySlotCapabilities.OnlyNormal,
+                        state
+                    )
+                ).ToList();
+            return new SqlQueryTriviaList(slotFields);
+        }
+        internal static SqlQueryTriviaList CreateFromDraftAndElement(
+                SqlQueryDraft draft,
+                IEnumerable<SqlQueryTriviaElement> values
+            )
+        {
+            var slotFields = values.Select(
+                element => new SqlQueryTriviaSlotField(
+                    SqlQuerySlotId.GetNextId(draft),
+                    SqlQuerySlotCapabilities.OnlyNormal,
+                    SqlQueryTriviaSlotState.CreateNormal(element)
+                )
+            );
+            return new SqlQueryTriviaList(slotFields);
+        }
+        /// <summary>
+        /// 0許容リスト型なので、子要素が0の場合にドラフト参照無しに作成できるファクトリが有用。
+        /// </summary>
+        /// <returns></returns>
+        internal static SqlQueryTriviaList CreateFrom0() => new ([]);
+        #endregion
+
+        internal override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotFieldAbstract Slot)> IterateChildren(){
+            for (var i = 0; i < _values.Length; i++){
+                yield return (new SqlQueryElementRole(SqlQueryElementRoleEnum.Trivia, (ushort)i), _values[i]);
+            }
+        }
+
+        #region 再帰処理
+        internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
             StringBuilder sb = new();
             bool needNewLine = false;
             foreach (var trivia in _values){
+                if (trivia.State.Element is not SqlQueryTriviaElement te) throw new NotSupportedException("空白文字リストの子は全て空白文字要素のはず。");
                 //MissingNewlines : 行コメントの後に改行がない場合の処理
-                if (needNewLine && trivia.State.Element is not SqlQueryNewlineElement){
+                if (needNewLine && te is not SqlQueryNewlineElement){
                     switch (context.Options.MissingNewlines){
                         case AlertPolicy.AllowAndConvert:
                             sb.Append(context.Options.DefaultNewline);
@@ -358,21 +1201,28 @@ namespace Crast.Accessor.SqlWrapper{
                     }
                 }
                 //ShowTrivia : 表示対象外のトリビアは無視する
-                if (!context.Options.ShowTrivia.HasFlag(trivia.State.Element!.TriviaType)) continue;
+                if (!context.Options.ShowTrivia.HasFlag(te.TriviaType)) continue;
 
                 //子要素のビルド結果の回収
                 var fragment = trivia.Build(context);
-                sb.Append(fragment.Main);
-                needNewLine = fragment.NeedNewlineAfter;
+                if (fragment is not SqlBuiltQueryFragmentText f) throw new InvalidOperationException("空白文字要素のBuild結果がSqlBuiltQueryFragmentTextと異なる可能性は無いはず。");
+                sb.Append(f.Main);
+                needNewLine = f.After.Newline == RequiredStatus.Unsatisfied;
             }
-            return new SqlBuiltQueryFragmentTrivia(sb.ToString(), NeedNewlineAfter: needNewLine);
+            return new SqlBuiltQueryFragmentText(
+                sb.ToString(),
+                before : new SqlQueryFragmentConditions(Space : RequiredStatus.Satisfied),
+                after: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
+                TriviaOnly : true
+                );
         }
-        public override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             List<string> outputs = [""];//先頭行は、後から入るIDとRole以外に必要な情報が無いので空文字。
             bool needNewLine = false;
             foreach (var trivia in _values){
+                if (trivia.State.Element is not SqlQueryTriviaElement te) throw new NotSupportedException("空白文字リストの子は全て空白文字要素のはず。");
                 //MissingNewlines : 行コメントの後に改行がない場合の処理
-                if (needNewLine && trivia.State.Element is not SqlQueryNewlineElement){
+                if (needNewLine && te is not SqlQueryNewlineElement){
                     switch (context.Options.MissingNewlines){
                         case AlertPolicy.AllowAndConvert:
                             break;
@@ -389,7 +1239,7 @@ namespace Crast.Accessor.SqlWrapper{
                     }
                 }
                 //ShowTrivia : 表示対象外のトリビアは無視する
-                if (!context.Options.ShowTrivia.HasFlag(trivia.State.Element!.TriviaType)) continue;
+                if (!context.Options.ShowTrivia.HasFlag(te.TriviaType)) continue;
 
                 //子要素のビルド結果の回収
                 var fragment = trivia.DebugBuild(context);
@@ -397,8 +1247,10 @@ namespace Crast.Accessor.SqlWrapper{
                 //罫線追加処理
                 var framedFragment = fragment.Values;
                 framedFragment[0] = $"├{framedFragment[0]}";
-                if (framedFragment.Length > 1){
-                    for (int i = 1; i < framedFragment.Length; i++){
+                if (framedFragment.Length > 1)
+                {
+                    for (int i = 1; i < framedFragment.Length; i++)
+                    {
                         framedFragment[i] = $"│{framedFragment[i]}";
                     }
                 }
@@ -407,93 +1259,163 @@ namespace Crast.Accessor.SqlWrapper{
                 needNewLine = fragment.NeedNewlineAfter;
             }
             //末尾の罫線を変える処理
-            for (var i = outputs.Count - 1; i >= 0; i--){
-                if (outputs[i].StartsWith("├")){
+            for (var i = outputs.Count - 1; i >= 0; i--)
+            {
+                if (outputs[i].StartsWith("├"))
+                {
                     outputs[i] = $"└{outputs[i].Substring(1)}";
                     break;
-                } else if (outputs[i].StartsWith("│")){
+                }
+                else if (outputs[i].StartsWith("│"))
+                {
                     outputs[i] = $"　{outputs[i].Substring(1)}";
                 }
             }
 
             return new SqlDebugBuiltQuery([.. outputs], NeedNewlineAfter: needNewLine);
         }
-        public override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotField Slot)> IterateChildren(){
-            for (var i = 0; i < _values.Length; i++){
-                yield return (new SqlQueryElementRole(SqlQueryElementRoleEnum.Trivia, i), _values[i]);
-            }
-        }
         internal override SqlQueryTriviaList CloneNode(SqlQueryDraft draft){
-            var clonedChildren = new List<SqlQuerySlotState<SqlQueryTriviaElement>>();
+            var clonedChildren = new List<SqlQueryTriviaSlotState>();
             foreach (var (role, slot) in IterateChildren()){
-                if (slot.State is not SqlQuerySlotState<SqlQueryTriviaElement> s)
-                    throw new InvalidOperationException("SqlQueryTriviaListの子要素がSqlQueryTriviaElementでない、想定外の状況。");
+                if (slot.State is not SqlQueryTriviaSlotState s) throw new InvalidOperationException("SqlQueryTriviaListの子要素がSqlQueryTriviaElementでない、想定外の状況。");
                 clonedChildren.Add(s.CloneNode(draft));
             }
-            return Create(draft,clonedChildren);
+            return CreateFromDraftAndState(draft, clonedChildren);
         }
-        /// <summary>
-        /// SqlQueryTriviaListの子要素を、指定されたロールに基づいて置換する。
-        /// </summary>
-        /// <remarks>
-        /// 子要素はroleによって異なる型になり得るので、非ジェネリックのこのメソッドはAlterではなく本メソッド。
-        /// roleの該当無しはnull、newNodeの型違いは例外を投げる。
-        /// </remarks>
-        /// <param name="draft"></param>
-        /// <param name="role"></param>
-        /// <param name="newNode"></param>
-        /// <returns></returns>
-        internal override SqlQueryTriviaList? ReplaceChildByRole(SqlQueryDraft draft, SqlQueryElementRole role, SqlQuerySlotState newNode){
-            //roleが非適正ならnull
-            if (role.Name != SqlQueryElementRoleEnum.Trivia || role.Index < 0 || role.Index >= _values.Length) return null;
-            //newNodeがSqlQueryTriviaElementでないなら例外
-            if (newNode is not SqlQuerySlotState<SqlQueryTriviaElement> newTriviaState)
-                throw new ArgumentException("newNodeの型がSqlQueryTriviaElementでない。", nameof(newNode));
+        #endregion
 
-            List<SqlQuerySlotState<SqlQueryTriviaElement>> newChildren = _values.Select(slot => slot.State).ToList();
-            newChildren[role.Index] = newTriviaState;
-            return Reload(this, newChildren);
+
+
+        #region 子要素取得
+        //IterateChildrenするより楽っぽいのは個別実装。
+
+
+        internal override bool HasRole(SqlQueryElementRole role){
+            if (role.Name == SqlQueryElementRoleEnum.Listed){
+                if (role.Index < Length) return true;
+            }
+            return false;
         }
-
-        internal override SqlQueryElement? AddChildren(SqlQueryElementRole role, SqlQuerySlotState[] newNodes) {
-            //roleが非適正ならnull
-            if (role.Name != SqlQueryElementRoleEnum.Trivia || role.Index < 0 || role.Index >= _values.Length) return null;
-            //newNodeがSqlQueryTriviaElementでないなら例外
-            if (newNodes is not SqlQuerySlotState<SqlQueryTriviaElement>[] newTriviaStates)
-                throw new ArgumentException("newNodeの型がSqlQueryTriviaElementでない。", nameof(newNodes));
-
-            List<SqlQuerySlotState<SqlQueryTriviaElement>> newChildren = _values.Select(slot => slot.State).ToList();
-            //新しい子要素群を指定された位置に挿入する
-            newChildren.InsertRange(role.Index, newTriviaStates);
-            return Reload(this, newChildren);
+        internal override SqlQueryTriviaSlotField? GetChildByRole(SqlQueryElementRole role){
+            if (role.Name == SqlQueryElementRoleEnum.Listed){
+                if (role.Index < Length) return _values[role.Index];
+            }
+            return null;
         }
-        internal override SqlQueryElement? RemoveChildren(SqlQueryElementRole role, Byte count = 0) {
-            //roleが非適正ならnull
-            if (role.Name != SqlQueryElementRoleEnum.Trivia || role.Index < 0 || role.Index >= _values.Length) return null;
-            int size = count;
-            if (count == 0 || count > _values.Length - role.Index) { size = _values.Length - role.Index; }
-
-            List<SqlQuerySlotState<SqlQueryTriviaElement>> newChildren = _values.Select(slot => slot.State).ToList();
-            //指定された位置から指定された数だけ子要素を削除する
-            newChildren.RemoveRange(role.Index, size);
-            return Reload(this, newChildren);
+        internal override SqlQueryTriviaSlotField? GetChildById(SqlQuerySlotId id) {
+            foreach (var triviaField in _values) {
+                if (triviaField.Id == id) return triviaField;
+            }
+            return null;
         }
 
-        internal override SqlQueryTriviaList AdaptTo(SqlType targetDialect) {
+        #endregion
+
+        #region 自身と子スロットのID固定で子スロット内のStateを変更するRePlace処理
+
+        private List<SqlQueryTriviaSlotField> ReloadFieldsById(IEnumerable<(SqlQuerySlotId, SqlQueryTriviaSlotState)> states){
+            var newValues = _values.ToList();
+            foreach (var (id, state) in states){
+                if (!state.IsNormal) throw new ArgumentException("リストの子要素に非実要素は入らない");
+
+                bool idExist = false;
+                for (var i = 0; i < newValues.Count; i++){
+                    if (newValues[i].Id == id){
+                        newValues[i] = newValues[i].ReplaceState(state);
+                        idExist = true;
+                        break;
+                    }
+                }
+
+                if (!idExist) throw new ArgumentException($"指定のIDのスロットが直下に存在しない：{id.Value}");
+            }
+            return newValues;
+        }
+        private List<SqlQueryTriviaSlotField> ReloadFieldsByRole(IEnumerable<(SqlQueryElementRole, SqlQueryTriviaSlotState)> states){
+            var newValues = _values.ToList();
+            foreach (var (role, state) in states){
+                if (!state.IsNormal) throw new ArgumentException("リストの子要素に非実要素は入らない");
+
+                if (role.Name == SqlQueryElementRoleEnum.Listed){
+                    if (role.Index >= newValues.Count) throw new ArgumentOutOfRangeException($"{newValues.Count}個のリストの{role.Index}番目に上書きしようとしている。");
+                    newValues[role.Index] = newValues[role.Index].ReplaceState(state);
+                    continue;
+                }
+            }
+            return newValues;
+        }
+        internal override SqlQueryTriviaList ReplaceChildrenById(IEnumerable<(SqlQuerySlotId Id, SqlQuerySlotStateAbstract State)> states){
+            List<(SqlQuerySlotId, SqlQueryTriviaSlotState)> castedStates = [];
+            foreach (var (id, state) in states) {
+                if (state is SqlQueryTriviaSlotState t) castedStates.Add((id, t));
+            }
+            return new(ReloadFieldsById(castedStates));
+        }
+        internal override SqlQueryTriviaList ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotStateAbstract State)> states){
+            List<(SqlQueryElementRole, SqlQueryTriviaSlotState)> castedStates = [];
+            foreach (var (role, state) in states){
+                if (state is SqlQueryTriviaSlotState t) castedStates.Add((role, t));
+            }
+            return new(ReloadFieldsByRole(castedStates));
+        }
+        internal override SqlQueryTriviaList ReplaceChildById(SqlQuerySlotId id, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenById([(id, state)]);
+        }
+        internal override SqlQueryTriviaList ReplaceChildByRole(SqlQueryElementRole Role, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenByRole([(Role, state)]);
+        }
+
+
+        #endregion
+
+        #region リスト型特有の挿入・削除処理
+
+        private IEnumerable<SqlQueryTriviaSlotField> ReloadChildrenWithAdded(SqlQueryDraft draft, ushort index, IEnumerable<SqlQueryTriviaSlotState> states){
+            if (index > Length) throw new ArgumentOutOfRangeException($"{Length}個のリストの{index}番目に挿入しようとしている");
+            return states
+                .Select(state => SqlQueryTriviaSlotField.Create(draft, state))
+                .LINQEmbed(index, _values);
+        }
+        private IEnumerable<SqlQueryTriviaSlotField> ReloadChildrenWithRemoved(ushort index, ushort count){
+            if (index >= Length) throw new ArgumentOutOfRangeException($"{Length}個のリストの{index}番目を削除しようとしている");
+            return _values
+                .Take(index)
+                .Concat(_values.Skip(index + count))
+                ;
+        }
+        internal SqlQueryTriviaList PushChildren(SqlQueryDraft draft, IEnumerable<SqlQueryTriviaSlotState> states) => AddChildren(draft, (ushort)Length, states);
+        internal SqlQueryTriviaList AddChildren(SqlQueryDraft draft, ushort index, IEnumerable<SqlQueryTriviaSlotState> states){
+            return new(ReloadChildrenWithAdded(draft, index, states));
+        }
+        internal SqlQueryTriviaList AddChildrenByElement(SqlQueryDraft draft, ushort index, SqlQueryTriviaElement[] elements){
+            return new(ReloadChildrenWithAdded(draft, index, elements.Select(e => SqlQueryTriviaSlotState.CreateNormal(e))));
+        }
+        internal SqlQueryTriviaList RemoveChildren(ushort index, ushort count = 0){
+            return new(ReloadChildrenWithRemoved(index, count));
+        }
+
+        #endregion
+
+
+        internal override SqlQueryTriviaList AdaptTo(SqlType targetDialect){
             //ハッシュコメント非対応方言かつ、ハッシュコメントを含んでいるときのみ、再構成が必要になる。
-            bool isSafe = true;
-            foreach (var slot in _values) {
-                isSafe &= slot.State.Element!.SafeType.HasFlag(targetDialect);
-            }
-            if (isSafe) return this;
-
-            List<SqlQuerySlotState<SqlQueryTriviaElement>> adaptedChildren = [];
-            foreach (var slot in _values){
-                if (slot.State.Element!.AdaptTo(targetDialect) is not SqlQueryTriviaElement adaptedElement) throw new InvalidOperationException("空白文字型が空白文字型に変換されない異常事態。");
-                adaptedChildren.Add(new SqlQuerySlotState<SqlQueryTriviaElement>(SqlQuerySlotStateEnum.Normal, adaptedElement));
-            }
-            return Reload(this, adaptedChildren);
-
+            //IDとStateのセットで対象要素を取り出して、Element.AdaptTo(targetDialect)で再構成したものでReplaceする方針。
+            if (EnableType.HasFlag(targetDialect)) return this;
+            var adaptedChildren = IterateChildren()
+                                .Where(child => !child.Slot.State.Element.EnableType.HasFlag(targetDialect))
+                                .Select(child => (child.Role,
+                                    child
+                                    .Slot
+                                    .State
+                                    .Element
+                                    .ChainCastTo<SqlQueryTriviaElement>()
+                                    .AdaptTo(targetDialect)
+                                    .WrapToNormalState()
+                                    .ChainCastTo<SqlQuerySlotStateAbstract>()
+                                    )
+                                )
+                                ;
+            return ReplaceChildrenByRole(adaptedChildren);
         }
 
 
@@ -501,28 +1423,68 @@ namespace Crast.Accessor.SqlWrapper{
 
     #endregion
 
+
     //未達成項目：
     //StructualElementの時点で、Build内で空白文字を接続する処理を定義しておくべき。
     //それに伴って、いくつかBuildOptionの項目も追加する必要はある。
     //Triviaと本体とを分けた状態で親に回して、親の方で本体を加工したのちにTriviaを接続する方が良さげ。
     //定置キーワードの指定や空白文字の必須性など、一段上で処理した方がいい処理は多そう。
+    //→代用ElementによるTrivia配置構成の更新は一通り終わったので、Build処理とDebugBuild処理の整備に入る。
 
     #region Token要素の定義
 
-    public abstract record SqlQueryKeywordElement : SqlQueryTokenElement{
+    internal abstract record SqlQueryKeywordElement : SqlQueryTokenElement{
         public abstract string String { get; }
-        public SqlQueryKeywordElement(SqlQuerySlotField<SqlQueryTriviaList> leadingTrivia, SqlQuerySlotField<SqlQueryTriviaList> trailingTrivia)
+        public SqlQueryKeywordElement(SqlQueryTriviaListSlotField leadingTrivia, SqlQueryTriviaListSlotField trailingTrivia)
             : base(leadingTrivia, trailingTrivia)
         {
         }
     }
-    public sealed record SqlQueryFixedKeywordElement : SqlQueryKeywordElement{
+    /// <summary>
+    /// 定置固定キーワード要素。DefaultOnlyでのみ作られるため、実際にインスタンスが作られることは無く、型パラメータとしてのみ使われる。
+    /// </summary>
+    internal sealed record SqlQueryFixedKeywordElement : SqlQueryKeywordElement{
         public override string String { get; }
-        public SqlQueryFixedKeywordElement(SqlQuerySlotField<SqlQueryTriviaList> leadingTrivia, SqlQuerySlotField<SqlQueryTriviaList> trailingTrivia)
+        public SqlQueryFixedKeywordElement(string word, SqlQueryTriviaListSlotField leadingTrivia, SqlQueryTriviaListSlotField trailingTrivia)
             : base(leadingTrivia, trailingTrivia)
         {
+            String = word;
         }
 
+        internal override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotFieldAbstract Slot)> IterateChildren() {
+            yield return (SqlQueryElementRole.Trivia(0),LeadingTrivia);
+            yield return (SqlQueryElementRole.Trivia(1), TrailingTrivia);
+        }
+
+        #region 再帰処理
+        /// <summary>
+        /// 実行用のクエリを構築する処理。
+        /// </summary>
+        /// <param name="context"></param>
+        /// <returns></returns>
+        internal override SqlBuiltQueryFragmentNode Build(SqlBuildContext context) {
+            return new SqlBuiltQueryFragmentNode(
+                LeadingTrivia.Build(context),
+                new SqlBuiltQueryFragmentText(String, new SqlQueryFragmentConditions(), new SqlQueryFragmentConditions()),
+                TrailingTrivia.Build(context)
+                );
+        }
+        /// <summary>
+        /// 人間用のクエリ構造図を構築する処理。
+        /// </summary>
+        /// <param name="context"></param>
+        /// <returns></returns>
+        internal abstract SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context);
+        //再帰的にクローンする必要があるので、この処理ではまずい。
+        //internal SqlQueryElement CloneNode() => this with { Id = SqlQueryDraft.GetNewId() };
+        /// <summary>
+        /// 構造を保ったまま、IDのみ再帰的に振り直したクローンを生成する。
+        /// </summary>
+        /// <param name="draft"></param>
+        /// <returns></returns>
+        internal abstract SqlQueryElement CloneNode(SqlQueryDraft draft);
+        internal virtual SqlQueryElement AdaptTo(SqlType targetDialect) => this;
+        #endregion
 
     }
 
@@ -538,7 +1500,7 @@ namespace Crast.Accessor.SqlWrapper{
     /// <summary>
     /// SQLクエリの「句」に対応するデータクラスの基底。
     /// </summary>
-    interface ISqlClause : ISqlQueryFragment{
+    internal interface ISqlClause : SqlQueryNode{
         // 例えば、WHERE句やORDER BY句などのSQLクエリの一部を表すインターフェース。
     }
     /// <summary>

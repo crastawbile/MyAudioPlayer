@@ -1,4 +1,5 @@
 ﻿using System.Collections.Immutable;
+using System.ComponentModel.Design;
 
 namespace Crast.Accessor.SqlWrapper {
     ///クエリビルダー関連ブロックの内、別ファイルに分けるほどではなさそうなクラス群。
@@ -80,6 +81,7 @@ namespace Crast.Accessor.SqlWrapper {
         ThrowException     // 例外を投げる（Build中断）
     }
     #endregion
+
     public record SqlQueryBuildOptionBase {
         //SQL方言はこっちには含まない。
         //デフォルト値での解決が許されない基軸であること、
@@ -120,7 +122,7 @@ namespace Crast.Accessor.SqlWrapper {
         #endregion
     }
 
-    public abstract class SqlBuildContextBase {
+    internal abstract class SqlBuildContextBase {
         public SqlDialect Dialect { get; }
         public virtual SqlQueryBuildOptionBase Options { get; }
         //コンストラクタ
@@ -167,7 +169,7 @@ namespace Crast.Accessor.SqlWrapper {
     /// <summary>
     /// SqlBuiltQueryを出力する過程で、プレースホルダーを管理するためのクラス。
     /// </summary>
-    public sealed class SqlBuildContext : SqlBuildContextBase {
+    internal sealed class SqlBuildContext : SqlBuildContextBase {
         public override SqlQueryBuildOptions Options { get; }
         #region Build中に累積されていく情報
         private readonly Dictionary<string, object> _parameters = [];
@@ -196,7 +198,7 @@ namespace Crast.Accessor.SqlWrapper {
     /// <summary>
     /// SqlDebugBuiltQueryを出力する過程で、途中の情報を管理するためのクラス。
     /// </summary>
-    public class SqlDebugBuildContext : SqlBuildContextBase {
+    internal class SqlDebugBuildContext : SqlBuildContextBase {
         public override SqlQueryDebugBuildOptions Options { get; }
 
         //コンストラクタ
@@ -270,7 +272,7 @@ namespace Crast.Accessor.SqlWrapper {
     /// </remarks>
     /// <param name="Space"></param>
     /// <param name="Newline"></param>
-    public record SqlQueryFragmentConditions(
+    public readonly record struct SqlQueryFragmentConditions(
             RequiredStatus Space = RequiredStatus.Exempt, //空白文字が必要か
             RequiredStatus Newline = RequiredStatus.Exempt //改行が必要か
         );
@@ -293,29 +295,62 @@ namespace Crast.Accessor.SqlWrapper {
 
 
 
+    //Fragmentはそこまで巨大にはならないはずだが、struct化するほどではない。
+    //使い捨てデータクラスは、recordのままガベージコレクション任せでもいいらしい。
+    //パラメータとして保持したり値型として比較したりするならstructの方がいいっぽいが。
+    //struct制約はそれなりに重いので、継承やジェネリックが絡むところではあまり使わない方がいいらしい。
+    //なお、ジェネリックでstructを使うなら、ボクシング回避で必ずwhere T : structの構造体制約をかけること。
+
+
+
+    /// <summary>
+    /// Buildの返り値の共通基底。
+    /// </summary>
+    internal abstract record SqlBuiltQueryFragment{
+        internal abstract SqlBuiltQueryFragmentText ToText(SqlBuildContext context);
+    }
+
+
     /// <summary>
     /// SqlQueryElement.Buildから出力される加工途中の文字列そのものを表すクラス。
     /// </summary>
-    /// <remarks>
-    /// 預かるデータ自体はプレースホルダー化されるため、こっちの文字列はstructでいい。
-    /// </remarks>
     /// <param name="Main"></param>
-    public readonly record struct SqlBuiltQueryFragmentText(
-        string Main,
-        SqlQueryFragmentConditions Before, //前方制約
-        SqlQueryFragmentConditions After //後方制約
-        ) {
-        public static SqlBuiltQueryFragmentText Empty => new("", new SqlQueryFragmentConditions(), new SqlQueryFragmentConditions());
-        public bool IsEmpty => Main == "" && Before == new SqlQueryFragmentConditions() && After == new SqlQueryFragmentConditions();
+    internal record SqlBuiltQueryFragmentText : SqlBuiltQueryFragment{
+        internal string Main { get; }
+        internal SqlQueryFragmentConditions Before { get; } //前方制約
+        internal SqlQueryFragmentConditions After { get; } //後方制約
+        internal int? Precedence { get; init; } //式型における、演算の優先順位。括弧の有無に影響。
+        internal bool TriviaOnly { get; } //トリビアのみのフラグメントかどうか
+        internal static SqlBuiltQueryFragmentText EmptyStructure => new("", new SqlQueryFragmentConditions(), new SqlQueryFragmentConditions());
+        internal static SqlBuiltQueryFragmentText EmptyTrivia => new("", new SqlQueryFragmentConditions(), new SqlQueryFragmentConditions(), TriviaOnly: true);
+        internal bool IsEmpty => Main == "" && Before == new SqlQueryFragmentConditions() && After == new SqlQueryFragmentConditions();
+        //コンストラクタ
+        internal SqlBuiltQueryFragmentText(
+            string main, 
+            SqlQueryFragmentConditions before, 
+            SqlQueryFragmentConditions after,
+            int? precedence = null,
+            bool TriviaOnly = false
+            )
+        {
+            Main = main;
+            Before = before;
+            After = after;
+            Precedence = precedence;
+            this.TriviaOnly = TriviaOnly;
+        }
         /// <summary>
         /// 別のFragmentを後ろに接続する。
         /// </summary>
+        /// <remarks>
+        /// precedenceの計算は式型の債務なので、こっちでは正しい新たなprecedenceを受け取る前提。
+        /// </remarks>
         /// <param name="after"></param>
         /// <param name="context"></param>
         /// <returns></returns>
         /// <exception cref="ArgumentException"></exception>
         /// <exception cref="InvalidOperationException"></exception>
-        public SqlBuiltQueryFragmentText Join(SqlBuiltQueryFragmentText after, SqlBuildContext context) {
+        internal SqlBuiltQueryFragmentText JoinAfter(SqlBuiltQueryFragmentText after, SqlBuildContext context, int? precedence = null) {
             if(after.IsEmpty) { return this; }
             if(this.IsEmpty) { return after; }
 
@@ -360,26 +395,187 @@ namespace Crast.Accessor.SqlWrapper {
                         throw new InvalidOperationException($"想定外のAlertPolicy");
                 }
             }
+
+            //precedenceの算出処理
+            int? newPrecedence;
+            if (this.Precedence is int bp) {
+                if (after.Precedence is int) {
+                    if (precedence is int np) {
+                        newPrecedence = np;
+                    } else {
+                        throw new ArgumentException("優先度のあるビルド文字列同士の結合なのに、結合後の優先度が指定されていない。");
+                    }
+                } else {
+                    if (precedence is int){
+                        throw new ArgumentException("優先度のあるビルド文字列と優先度のないビルド文字列の結合なのに、結合後の優先度が指定されている。");
+                    }else{
+                        newPrecedence = bp;
+                    }
+                }
+            } else {
+                if (after.Precedence is int ap){
+                    if (precedence is int){
+                        throw new ArgumentException("優先度のないビルド文字列と優先度のあるビルド文字列の結合なのに、結合後の優先度が指定されている。");
+                    }else{
+                        newPrecedence = ap;
+                    }
+                }else{
+                    if (precedence is int){
+                        throw new ArgumentException("優先度のないビルド文字列同士の結合なのに、結合後の優先度が指定されている。");
+                    }else{
+                        newPrecedence = null;
+                    }
+                }
+            }
+
             return new SqlBuiltQueryFragmentText(
                 beforeText + afterText,
                 this.Before,
-                after.After
+                after.After,
+                newPrecedence,
+                this.IsEmpty && after.IsEmpty
             );
 
         }
-        /// <summary>
-        /// FragmentNodeの三つのFragmentをまとめて後ろに接続する。
-        /// </summary>
-        /// <param name="node"></param>
-        /// <param name="context"></param>
-        /// <returns></returns>
-        public SqlBuiltQueryFragmentText JoinNode(SqlBuiltQueryFragmentNode node, SqlBuildContext context) {
-            var result = this.Join(node.Leading, context);
-            result = node.Main.HasValue ? result.Join(node.Main!.Value, context) : result;
-            result = result.Join(node.Trailing, context);
-            return result;
-        }
+        internal SqlBuiltQueryFragmentText JoinBefore(SqlBuiltQueryFragmentText before, SqlBuildContext context, int? precedence = null) => before.JoinAfter(this, context, precedence);
+        internal override SqlBuiltQueryFragmentText ToText(SqlBuildContext context) => this;
     };
+
+
+    //BuiltFragment同様、SqlQueryFragmentConditionsを基準にする。
+    //文字列自体を、罫線追加前と追加後でそれぞれ専用型にしておくと、処理の区別が楽か。
+
+
+    /// <summary>
+    /// DebugBuildで単独のElementから出力される文字列自体(罫線追加前)を指すデータ型。
+    /// </summary>
+    /// <remarks>
+    /// 
+    /// </remarks>
+    /// <param name="Values"></param>
+    internal abstract record SqlDebugBuiltFragmentTexts {
+        internal readonly SqlQuerySlotId? Id;
+        internal readonly SqlQueryElementRole? Role;
+        internal readonly string JapaneseName;
+        internal readonly string[] Notices;
+
+        //コンストラクタ
+        internal SqlDebugBuiltFragmentTexts(
+            SqlQuerySlotId? id,
+            SqlQueryElementRole? role,
+            string japaneseName,
+            string[] notices
+            ) {
+            Id = id;
+            Role = role;
+            JapaneseName = japaneseName;
+            Notices = notices;
+
+        }
+
+        internal IEnumerable<string> OutputTexts() {
+            yield return $"：";
+        }
+
+        //DebugBuildの出力形式をここで定義しておくべきだな……。
+        //一行目が、SlotIdとElementRole。これは、後から入れるしかない情報。
+        //二行目が、Elementの型の日本語名と、末端型なら括弧内に内容。
+        //他は全部子要素か？　いや、通知挿入がある場合はDebugBuild出力にも追加か。
+        //じゃあまず、通知の出力文字列を確定させるために通知型を作る……？
+        //いや、通知型がどうなってもこっちの債務を処理できるようにここの型を作る。
+        //後置型の通知はcontextに入ってるから、こっちは現地型の通知挿入文字列だけ受けておけばいい。
+        //例え文字列型で無かったとしても、ここの定義で解決できる。
+        //一応、通知挿入文字列の先頭には罫線もどきを付けて、視認性はよくしたい。
+
+        //えーと、割と出力形式がばらばらだな？
+        //空白文字は確定でリスト要素なのでroleが不要。
+        //空白や改行は個数が必要、コメントは改行してから表示したい。
+        //実文字要素は、roleとnameがほぼ同じ、記号類は+演算子とか(左括弧とかでいい気がする。
+        //構造要素は、文か句か式だろうから、その名前だけでいい気がする。
+        //つまり、roleが必要な場合は無いな？
+        //コメントだけが特殊で、他はIDと中身だけでいい。
+        //ってか、ブロックコメントをElement一つで処理せず、行ごとに別のエレメントと見做すべきなのか。
+        //ブロックコメント内の改行もBuildOptionの管理下だもんな。
+        //そうか、全てのコメント要素の下に、裸コメント要素を置いておけば、全て同じ処理になるのか。
+
+        
+
+
+
+    }
+
+    /// <summary>
+    /// ElementのDebugBuild時点の、IDもRoleも無い状態のElement単独の文字列化
+    /// </summary>
+    internal sealed record SqlDebugBuiltFragmentTextsBase : SqlDebugBuiltFragmentTexts {
+        //コンストラクタ
+        internal SqlDebugBuiltFragmentTextsBase(
+            string japaneseName,
+            string[] notices
+            )
+            :base(null, null, japaneseName, notices)
+        {
+        }
+        internal SqlDebugBuiltFragmentTextsWithId WithId(SqlQuerySlotId id) {
+            return new SqlDebugBuiltFragmentTextsWithId(id, JapaneseName, Notices);
+        }
+
+    }
+    /// <summary>
+    /// FieldのDebugBuild時点の、IDは追加されたがRoleは無い状態のElement単独の文字列化
+    /// </summary>
+    internal sealed record SqlDebugBuiltFragmentTextsWithId : SqlDebugBuiltFragmentTexts{
+        //コンストラクタ
+        internal SqlDebugBuiltFragmentTextsWithId(
+            SqlQuerySlotId id,
+            string japaneseName,
+            string[] notices
+            )
+            : base(id, null, japaneseName, notices)
+        {
+        }
+        internal SqlDebugBuiltFragmentTextsWithRole WithRole(SqlQueryElementRole role) {
+            return new SqlDebugBuiltFragmentTextsWithRole(Id!.Value, role, JapaneseName, Notices);
+        }
+
+    }
+    /// <summary>
+    /// 親ElementでのDebugBuild時点の、Roleまで追加された状態のElement単独の文字列化
+    /// </summary>
+    internal sealed record SqlDebugBuiltFragmentTextsWithRole : SqlDebugBuiltFragmentTexts{
+        //コンストラクタ
+        internal SqlDebugBuiltFragmentTextsWithRole(
+            SqlQuerySlotId id,
+            SqlQueryElementRole role,
+            string japaneseName,
+            string[] notices
+            )
+            : base(id, role, japaneseName, notices)
+        {
+        }
+
+    }
+    /// <summary>
+    /// 罫線を付加された、子Elementの出力文字列群の集合
+    /// </summary>
+    internal sealed record SqlDebugBuiltFragmentGroup {
+        internal string[] Texts { get; }
+        //コンストラクタ
+        internal SqlDebugBuiltFragmentGroup(List<SqlDebugBuiltFragmentTextsWithRole> children) {
+            string[] texts = [];
+            var length = children.Count;
+            if (length == 0) {
+                Texts = texts;
+                return;
+            }
+            foreach (var child in children) {
+                
+            }
+
+
+            Texts = texts;
+        }
+    }
 
 
 
@@ -388,6 +584,7 @@ namespace Crast.Accessor.SqlWrapper {
     /// </summary>
     /// <remarks>
     /// 部分出力もあり得るデバッグビルドの特性上、フラグメント型を個別に持たない。
+    /// →Triviaの配置変更に伴い、こっちも二段階化する必要があるかも。
     /// </remarks>
     public readonly record struct SqlDebugBuiltQuery(
         //実行用Buildとは違って、罫線追加済みの文字列を、行ごとに分けた文字列配列として保持する。
@@ -398,7 +595,7 @@ namespace Crast.Accessor.SqlWrapper {
         bool NeedNewlineAfter = false //後ろに改行が必要か
         );
     // 構築中の通知
-    public readonly record struct BuildNotice(
+    internal readonly record struct BuildNotice(
         NoticeLevel Level, // Info, Warning, Critical
         string Message,
         SqlQueryElement Origin // どの要素が発信したか
@@ -407,8 +604,8 @@ namespace Crast.Accessor.SqlWrapper {
         None,       // 無通知
         Info,       // ℹ\u2139　無修正でもビルド自体は問題なく行えるが、注意を促すべき状況（例: 非推奨の構文の使用など）
         Warning,    // ⚠️\u26A0　Context設定によってビルドは問題なく行われるが、修正すべきであることに違いはない状況。
-        Error,   // ⛔\u26D4　Context設定によっては修正可能だが、今回は修正せずに通知する設定である場合。
-        Critical       // ❌\u274C　Context設定で解決できない、ビルド自体が失敗する状況。
+        Error,      // ⛔\u26D4　Context設定によっては修正可能だが、今回は修正せずに通知する設定である場合。
+        Critical    // ❌\u274C　Context設定で解決できない、ビルド自体が失敗する状況。
     }
 
 
