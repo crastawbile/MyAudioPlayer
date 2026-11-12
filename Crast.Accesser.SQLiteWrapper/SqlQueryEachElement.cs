@@ -7,12 +7,15 @@ namespace Crast.Accessor.SqlWrapper{
     ///各エレメントの具象型及び比較的細かい抽象型をまとめたファイル。
 
     //SqlQueryElement                                全ての基底
-    //├SqlQueryTriviaElement                        空白文字要素
-    //├SqlQueryTriviaList                           空白文字リスト
-    //└SqlQueryStructuralElement                    実文字要素
-    //　├SqlQueryStructuralList                     実文字リストの非ジェネリック抽象
-    //　│└SqlQueryStructuralList<TElement>         実文字リストのジェネリック具象
-    //　└SqlQueryStructuralSingleElement            単独実文字要素
+    //├SqlQueryStringElement                        裸文字要素
+    //├SqlQueryTriviaList                           周辺要素リスト
+    //├SqlQueryTriviaElement                        周辺要素
+    //│├SqlQueryWhiteSpaceElement                  空白文字要素
+    //│└SqlQueryCommentElement                     コメント要素
+    //└SqlQueryStructuralElement                    機構要素
+    //　├SqlQueryStructuralList                     機構要素リストの非ジェネリック抽象
+    //　│└SqlQueryStructuralList<TElement>         機構要素リストのジェネリック具象
+    //　└SqlQueryStructuralSingleElement            単独機構要素
     //　　├SqlQuerySubElement                       非実体要素の非ジェネリック抽象
     //　　│└SqlQuerySubElement<TElement>           非実体要素のジェネリック具象
     //　　└SqlQueryRealElement                      SQL実体要素
@@ -87,6 +90,13 @@ namespace Crast.Accessor.SqlWrapper{
         internal static SqlQueryTriviaSlotState WrapToNormalState(this SqlQueryTriviaElement element){
             return new(element);
         }
+        /// <summary>
+        /// ElementをStateに変換する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <returns></returns>
+        internal static SqlQueryStringSlotState WrapToNormalState(this SqlQueryStringElement element){
+            return new(element);
+        }
         #endregion
 
     }
@@ -96,24 +106,51 @@ namespace Crast.Accessor.SqlWrapper{
     #region 抽象型の定義の列挙
 
     /// <summary>
-    /// 空白文字型。子要素を持たない。
+    /// 周辺要素型。空白、改行、コメントを総称する親クラス。
     /// </summary>
-    /// <remarks>
-    /// 空白文字、改行文字、コメントを総称する親クラス。
-    /// </remarks>
     internal abstract record SqlQueryTriviaElement : SqlQueryElement{
         //子要素を持たないことで処理が確定するメソッドをsealedにして、派生クラスでのオーバーライドを禁止する。
-        internal sealed override bool HasChild => false;
+        //→コメント要素は裸文字要素を子要素に持つことになったので、空白文字要素に移動。
         internal sealed override bool HasChildNode => false;
         internal abstract TriviaType TriviaType { get; }
-        internal sealed override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotFieldAbstract Slot)> IterateChildren() { yield break; }
-        internal sealed override SqlQueryElement CloneNode(SqlQueryDraft draft) => this;
         internal abstract override SqlBuiltQueryFragmentText Build(SqlBuildContext context);
-
-        internal sealed override SqlQueryElement? ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states) => throw new NotSupportedException("空白文字型ノードは子要素を持たない");
-        internal sealed override SqlQueryElement? ReplaceChildrenById(IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states) => throw new NotSupportedException("空白文字型ノードは子要素を持たない");
-
+        internal override SqlQueryTriviaElement CloneNode(SqlQueryDraft draft){
+            throw new NotImplementedException();
+        }
         internal override SqlQueryTriviaElement AdaptTo(SqlType targetDialect) => this;
+
+        #region 子要素取得
+        internal override SqlQueryStringSlotField? GetChildByRole(SqlQueryElementRole role) => null;
+        internal override SqlQueryStringSlotField? GetChildById(SqlQuerySlotId id) => null;
+        #endregion
+
+        #region 自身と子スロットのID固定で子スロット内のStateを変更するRePlace処理
+        internal override SqlQueryTriviaElement? ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states) => null;
+        internal override SqlQueryTriviaElement? ReplaceChildrenById(IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states) => null;
+        internal override SqlQueryTriviaElement? ReplaceChildByRole(SqlQueryElementRole role, SqlQuerySlotStateAbstract state) => null;
+        internal override SqlQueryTriviaElement? ReplaceChildById(SqlQuerySlotId id, SqlQuerySlotStateAbstract state) => null;
+        #endregion
+    }
+    /// <summary>
+    /// 周辺要素のうち、空白文字を表す抽象クラス。
+    /// </summary>
+    internal abstract record SqlQueryWhiteSpaceElement : SqlQueryTriviaElement{
+        internal sealed override bool HasChild => false;
+        internal sealed override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotFieldAbstract Slot)> IterateChildren() { yield break; }
+        internal sealed override SqlQueryWhiteSpaceElement CloneNode(SqlQueryDraft draft) => this;
+        internal sealed override SqlQueryWhiteSpaceElement? ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states) => throw new NotSupportedException("空白文字型ノードは子要素を持たない");
+        internal sealed override SqlQueryWhiteSpaceElement? ReplaceChildrenById(IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states) => throw new NotSupportedException("空白文字型ノードは子要素を持たない");
+        internal override SqlQueryWhiteSpaceElement AdaptTo(SqlType targetDialect) => this;
+    }
+    /// <summary>
+    /// 周辺要素のうち、コメントを表す抽象クラス。
+    /// </summary>
+    /// <param name="Value"></param>
+    internal abstract record SqlQueryCommentElement : SqlQueryTriviaElement {
+        internal sealed override TriviaType TriviaType { get; } = TriviaType.Comment;
+        internal override bool HasChild => true;//空のブロックコメントは子要素の裸文字列を持たないためfalseとなる。
+        internal override SqlQueryCommentElement AdaptTo(SqlType targetDialect) => this;
+
     }
     /// <summary>
     /// 実文字要素。前後にコメント含む空白文字を持てる。
@@ -366,7 +403,7 @@ namespace Crast.Accessor.SqlWrapper{
     /// <summary>
     /// 空白文字のうち、水平空白文字（スペースやタブ）を表す抽象クラス。
     /// </summary>
-    internal abstract record SqlQueryHorizontalWhitespace : SqlQueryTriviaElement{
+    internal abstract record SqlQueryHorizontalWhitespace : SqlQueryWhiteSpaceElement{
     }
     /// <summary>
     /// 空白文字のうち、半角スペースを表す具象クラス。
@@ -425,7 +462,7 @@ namespace Crast.Accessor.SqlWrapper{
     /// count=0の場合は、ビルド時にcontext.Options.DefaultNewlineを使用する。
     /// </remarks>
     /// <param name="Count"></param>
-    internal sealed record SqlQueryNewlineElement(byte Count = 0) : SqlQueryTriviaElement{
+    internal sealed record SqlQueryNewlineElement(byte Count = 0) : SqlQueryWhiteSpaceElement{
         internal override TriviaType TriviaType { get; } = TriviaType.Newline;
         internal static SqlQueryNewlineElement Create(byte count = 0){
             return new SqlQueryNewlineElement(count);
@@ -449,47 +486,180 @@ namespace Crast.Accessor.SqlWrapper{
             return new([valueStr]);
         }
     }
+
     /// <summary>
-    /// 空白文字のうち、コメントを表す抽象クラス。
+    /// コメントのうち、ブロックコメントを表す具象クラス。
     /// </summary>
-    /// <param name="Value"></param>
-    internal abstract record SqlQueryCommentElement(string Value) : SqlQueryTriviaElement { }
-    /// <summary>
-    /// 空白文字のうち、ブロックコメントを表す具象クラス。
-    /// </summary>
+    /// <remarks>
+    /// リスト型的な要素もあるが、コメント要素型であることが必須であるため、リスト型は継承していない。
+    /// また、子要素のRoleはSqlQueryElementRoleEnum.Stringである。
+    /// </remarks>
     internal sealed record SqlQueryBlockCommentElement : SqlQueryCommentElement{
-        internal override TriviaType TriviaType { get; } = TriviaType.Comment;
-        private SqlQueryBlockCommentElement(string value) : base(value){ }
-        internal static SqlQueryBlockCommentElement Create(string value){
-            return new SqlQueryBlockCommentElement(value);
+        private SqlQueryStringSlotField[] Values { get; }
+        internal int Length => Values.Length;
+        internal override bool HasChild => Values.Length > 0;
+        //コンストラクタ
+        private SqlQueryBlockCommentElement(IEnumerable<SqlQueryStringSlotField> values){
+            Values = [..values];
         }
+        #region ファクトリ
+        internal static SqlQueryBlockCommentElement CreateFromDraftAndStates(SqlQueryDraft draft, IEnumerable<SqlQueryStringSlotState> values){
+            return new SqlQueryBlockCommentElement(values.Select(v => SqlQueryStringSlotField.CreateNormal(draft, v.Element)).ToArray());
+        }
+        internal static SqlQueryBlockCommentElement CreateFromIdAndStates(IEnumerable<(SqlQuerySlotId id, SqlQueryStringSlotState value)> values){
+            return new SqlQueryBlockCommentElement(values.Select(v => new SqlQueryStringSlotField(v.id, SqlQuerySlotCapabilities.OnlyNormal, v.value)).ToArray());
+        }
+        internal static SqlQueryBlockCommentElement CreateFromDraftAndElements(SqlQueryDraft draft, IEnumerable<SqlQueryStringElement> values){
+            return new SqlQueryBlockCommentElement(values.Select(v => SqlQueryStringSlotField.CreateNormal(draft, v)).ToArray());
+        }
+        internal static SqlQueryBlockCommentElement CreateFromIdAndElements(IEnumerable<(SqlQuerySlotId id, SqlQueryStringElement value)> values){
+            return new SqlQueryBlockCommentElement(values.Select(v => new SqlQueryStringSlotField(v.id, SqlQuerySlotCapabilities.OnlyNormal, v.value.WrapToNormalState())).ToArray());
+        }
+        internal static SqlQueryBlockCommentElement CreateFromDraftAndStrings(SqlQueryDraft draft, IEnumerable<string> values){
+            return new SqlQueryBlockCommentElement(values.Select(v => SqlQueryStringSlotField.CreateNormal(draft, SqlQueryStringElement.Create(v))).ToArray());
+        }
+        internal static SqlQueryBlockCommentElement CreateFromIdAndStrings(IEnumerable<(SqlQuerySlotId id, string value)> values){
+            return new SqlQueryBlockCommentElement(values.Select(v => new SqlQueryStringSlotField(v.id, SqlQuerySlotCapabilities.OnlyNormal, SqlQueryStringElement.Create(v.value).WrapToNormalState())).ToArray());
+        }
+
+        #endregion
+        internal override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotFieldAbstract Slot)> IterateChildren(){
+            for(ushort i = 0; i < Values.Length; i++){
+                yield return (new SqlQueryElementRole(SqlQueryElementRoleEnum.String, i), Values[i]);
+            }
+        }
+
+        #region 再帰処理
         internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
+            var valueStr = string.Join(context.Options.NewlineChar, Values.Select(v => v.State.Element.Value));
             return new SqlBuiltQueryFragmentText(
-                $"/*{Value}*/",
+                $"/*{valueStr}*/",
                 before: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
                 after: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
                 TriviaOnly: true
                 );
         }
         internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
-            return new([$"[コメント] : {Value}"]);
+            var valueStr = string.Join(context.Options.NewlineChar, Values.Select(v => v.State.Element.Value));
+            return new([$"[コメント] : {context.Options.NewlineChar}{valueStr}"]);
         }
+        internal override SqlQueryBlockCommentElement CloneNode(SqlQueryDraft draft){
+            return CreateFromDraftAndStates(draft, Values.Select(v => v.State));
+        }
+        internal override SqlQueryBlockCommentElement AdaptTo(SqlType targetDialect) => this;
+        #endregion
+
+        #region 子要素取得
+        internal override bool HasRole(SqlQueryElementRole role){
+            if (role.Name != SqlQueryElementRoleEnum.String) return false;
+            if (role.Index >= Values.Length) return false;
+            return true;
+        }
+        internal override SqlQueryStringSlotField? GetChildByRole(SqlQueryElementRole role){
+            if (!HasRole(role)) return null;
+            return Values[role.Index];
+        }
+        internal override SqlQueryStringSlotField? GetChildById(SqlQuerySlotId id){
+            foreach (var field in Values){
+                if (field.Id == id) return field;
+            }
+            return null;
+        }
+
+
+        #endregion
+
+        #region 自身と子スロットのID固定で子スロット内のStateを変更するRePlace処理
+
+        internal override SqlQueryBlockCommentElement? ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states){
+            var resultStates = Values.Select(v => v.State).ToArray();
+            foreach (var (role, state) in states){
+                if (role.Name != SqlQueryElementRoleEnum.String) return null;
+                if (state is not SqlQueryStringSlotState s) return null;
+                if (role.Index >= resultStates.Length) return null;
+                resultStates[role.Index] = s;
+            }
+            return CreateFromIdAndStates(Values.Select((v, i) => (v.Id, resultStates[i])));
+        }
+        internal override SqlQueryBlockCommentElement? ReplaceChildrenById(IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states){
+            var resultStates = Values.Select(v => v.State).ToArray();
+            foreach (var (id, state) in states){
+                if (state is not SqlQueryStringSlotState s) return null;
+
+                var index = Array.FindIndex(Values, v => v.Id == id);
+                if (index < 0) return null;
+                resultStates[index] = s;
+            }
+            return CreateFromIdAndStates(Values.Select((v, i) => (v.Id, resultStates[i])));
+        }
+        internal override SqlQueryBlockCommentElement? ReplaceChildByRole(SqlQueryElementRole role, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenByRole([(role, state)]);
+        }
+        internal override SqlQueryBlockCommentElement? ReplaceChildById(SqlQuerySlotId id, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenById([(id, state)]);
+        }
+        #endregion
+
+        #region リスト型特有の挿入・削除処理
+        internal SqlQueryBlockCommentElement AddChildren(SqlQueryDraft draft, ushort index, IEnumerable<SqlQueryStringSlotState> states) {
+            if (index > Length) throw new ArgumentOutOfRangeException($"{Length}個のリストの{index}番目に挿入しようとしている");
+            return new SqlQueryBlockCommentElement(
+                states
+                .Select(state => SqlQueryStringSlotField.Create(draft, state))
+                .LINQEmbed(index, Values)
+                );
+        }
+        internal SqlQueryBlockCommentElement RemoveChildren(ushort index, ushort count){
+            if (index + count > Length) throw new ArgumentOutOfRangeException($"{Length}個のリストの{index}番目から{count}個削除しようとしている");
+            return new SqlQueryBlockCommentElement(
+                Values
+                .LINQWithout(index, count)
+                );
+        }
+        #endregion
     }
     /// <summary>
     /// 空白文字のうち、行コメントを表す抽象クラス。
     /// </summary>
     internal abstract record SqlQueryLineCommentElement : SqlQueryCommentElement{
-        internal SqlQueryLineCommentElement(string value) : base(value) { }
+        internal SqlQueryStringSlotField Value { get; }
+        internal SqlQueryLineCommentElement(SqlQueryStringSlotField value){
+            Value = value;
+        }
+        internal override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotFieldAbstract Slot)> IterateChildren() {
+            yield return (new SqlQueryElementRole(SqlQueryElementRoleEnum.String, 0), Value);
+        }
     }
     /// <summary>
     /// 空白文字のうち、通常の行コメントを表す具象クラス。`--`で始まる形式。
     /// </summary>
     internal sealed record SqlQueryDoubleDashCommentElement : SqlQueryLineCommentElement{
-        internal override TriviaType TriviaType { get; } = TriviaType.Comment;
-        internal SqlQueryDoubleDashCommentElement(string value) : base(value) { }
-        internal static SqlQueryDoubleDashCommentElement Create(string value){
-            return new SqlQueryDoubleDashCommentElement(value);
+        //コンストラクタ
+        internal SqlQueryDoubleDashCommentElement(SqlQueryStringSlotField value) : base(value) { }
+
+        #region ファクトリ
+        internal static SqlQueryDoubleDashCommentElement CreateFromDraftAndState(SqlQueryDraft draft, SqlQueryStringSlotState value){
+            return new SqlQueryDoubleDashCommentElement(SqlQueryStringSlotField.CreateNormal(draft, value.Element));
         }
+        internal static SqlQueryDoubleDashCommentElement CreateFromIdAndState(SqlQuerySlotId id, SqlQueryStringSlotState value){
+            return new SqlQueryDoubleDashCommentElement(new SqlQueryStringSlotField(id, SqlQuerySlotCapabilities.OnlyNormal, value));
+        }
+        internal static SqlQueryDoubleDashCommentElement CreateFromDraftAndElement(SqlQueryDraft draft, SqlQueryStringElement value){
+            return new SqlQueryDoubleDashCommentElement(SqlQueryStringSlotField.CreateNormal(draft, value));
+        }
+        internal static SqlQueryDoubleDashCommentElement CreateFromIdAndElement(SqlQuerySlotId id, SqlQueryStringElement value){
+            return new SqlQueryDoubleDashCommentElement(new SqlQueryStringSlotField(id, SqlQuerySlotCapabilities.OnlyNormal, value.WrapToNormalState()));
+        }
+        internal static SqlQueryDoubleDashCommentElement CreateFromDraftAndString(SqlQueryDraft draft, string value){
+            return new SqlQueryDoubleDashCommentElement(SqlQueryStringSlotField.CreateNormal(draft, SqlQueryStringElement.Create(value)));
+        }
+        internal static SqlQueryDoubleDashCommentElement CreateFromIdAndString(SqlQuerySlotId id, string value){
+            return new SqlQueryDoubleDashCommentElement(new SqlQueryStringSlotField(id, SqlQuerySlotCapabilities.OnlyNormal, SqlQueryStringElement.Create(value).WrapToNormalState()));
+        }
+        #endregion
+
+        #region 再帰処理
+
         internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
             return new SqlBuiltQueryFragmentText(
                 $"--{Value}",
@@ -501,18 +671,76 @@ namespace Crast.Accessor.SqlWrapper{
         internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
             return new([$"[行コメント] : {Value}"]);
         }
+        internal override SqlQueryDoubleDashCommentElement CloneNode(SqlQueryDraft draft){
+            return CreateFromDraftAndState(draft, Value.State);
+        }
+        internal override SqlQueryLineCommentElement AdaptTo(SqlType targetDialect) => this;
+        #endregion
+
+        #region 自身と子スロットのID固定で子スロット内のStateを変更するRePlace処理
+        internal override SqlQueryDoubleDashCommentElement? ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states){
+            var resultState = Value.State;
+            foreach (var (role, state) in states){
+                if (role.Name != SqlQueryElementRoleEnum.String) return null;
+                if (state is not SqlQueryStringSlotState s) return null;
+                switch (role.Index){
+                    case 0:
+                        resultState = s;
+                        break;
+                    default:
+                        return null;
+                }
+            }
+            return CreateFromIdAndState(Value.Id, resultState);
+        }
+        internal override SqlQueryDoubleDashCommentElement? ReplaceChildrenById(IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states){
+            var resultState = Value.State;
+            foreach (var (id, state) in states){
+                if (state is not SqlQueryStringSlotState s) return null;
+                if (id == Value.Id) resultState = s;
+                else return null;
+            }
+            return CreateFromIdAndState(Value.Id, resultState);
+        }
+        internal override SqlQueryDoubleDashCommentElement? ReplaceChildByRole(SqlQueryElementRole role, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenByRole([(role, state)]);
+        }
+        internal override SqlQueryDoubleDashCommentElement? ReplaceChildById(SqlQuerySlotId id, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenById([(id, state)]);
+        }
+        #endregion
     }
     /// <summary>
     /// 空白文字のうち、ハッシュコメントを表す具象クラス。`#`で始まる形式。MySQLなど一部の方言でのみ有効。
     /// </summary>
     internal sealed record SqlQueryHashCommentElement : SqlQueryLineCommentElement{
         internal override SqlType EnableType { get; } = SqlType.MySQL;//Allでないエレメントでのみ上書きする。
-        internal override TriviaType TriviaType { get; } = TriviaType.Comment;
 
-        internal SqlQueryHashCommentElement(string value) : base(value) { }
-        internal static SqlQueryHashCommentElement Create(string value){
-            return new SqlQueryHashCommentElement(value);
+        //コンストラクタ
+        internal SqlQueryHashCommentElement(SqlQueryStringSlotField value) : base(value) { }
+
+        #region ファクトリ
+        internal static SqlQueryHashCommentElement CreateFromDraftAndState(SqlQueryDraft draft, SqlQueryStringSlotState value){
+            return new SqlQueryHashCommentElement(SqlQueryStringSlotField.CreateNormal(draft, value.Element));
         }
+        internal static SqlQueryHashCommentElement CreateFromIdAndState(SqlQuerySlotId id, SqlQueryStringSlotState value){
+            return new SqlQueryHashCommentElement(new SqlQueryStringSlotField(id, SqlQuerySlotCapabilities.OnlyNormal, value));
+        }
+        internal static SqlQueryHashCommentElement CreateFromDraftAndElement(SqlQueryDraft draft, SqlQueryStringElement value){
+            return new SqlQueryHashCommentElement(SqlQueryStringSlotField.CreateNormal(draft, value));
+        }
+        internal static SqlQueryHashCommentElement CreateFromIdAndElement(SqlQuerySlotId id, SqlQueryStringElement value){
+            return new SqlQueryHashCommentElement(new SqlQueryStringSlotField(id, SqlQuerySlotCapabilities.OnlyNormal, value.WrapToNormalState()));
+        }
+        internal static SqlQueryHashCommentElement CreateFromDraftAndString(SqlQueryDraft draft, string value){
+            return new SqlQueryHashCommentElement(SqlQueryStringSlotField.CreateNormal(draft, SqlQueryStringElement.Create(value)));
+        }
+        internal static SqlQueryHashCommentElement CreateFromIdAndString(SqlQuerySlotId id, string value){
+            return new SqlQueryHashCommentElement(new SqlQueryStringSlotField(id, SqlQuerySlotCapabilities.OnlyNormal, SqlQueryStringElement.Create(value).WrapToNormalState()));
+        }
+        #endregion
+
+        #region 再帰処理
         internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
             if (context.Dialect.Type.InFlag(EnableType)){
                 //ハッシュコメントをそのまま出力可能な場合
@@ -522,7 +750,7 @@ namespace Crast.Accessor.SqlWrapper{
                     after: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied, Newline: RequiredStatus.Unsatisfied),
                     TriviaOnly: true
                     );
-            } else {
+            }else{
                 //ハッシュコメント非対応の方言の場合、AlertPolicyに従って処理する
                 switch (context.Options.InvalidComments){
                     case AlertPolicy.AllowAndConvert:
@@ -556,10 +784,84 @@ namespace Crast.Accessor.SqlWrapper{
                         throw new InvalidOperationException("AlertPolicyの新たな選択肢に対する分岐が無い。");
                 }
             }
-            return new(fragment, NeedNewlineAfter : true);
+            return new(fragment, NeedNewlineAfter: true);
         }
+        internal override SqlQueryHashCommentElement CloneNode(SqlQueryDraft draft) => CreateFromDraftAndState(draft, Value.State);
         internal override SqlQueryLineCommentElement AdaptTo(SqlType targetDialect) => targetDialect.InFlag(EnableType) ? this : new SqlQueryDoubleDashCommentElement(Value);
+        #endregion
+
+        #region 自身と子スロットのID固定で子スロット内のStateを変更するRePlace処理
+        internal override SqlQueryHashCommentElement? ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states){
+            var resultState = Value.State;
+            foreach (var (role, state) in states){
+                if (role.Name != SqlQueryElementRoleEnum.String) return null;
+                if (state is not SqlQueryStringSlotState s) return null;
+                switch (role.Index){
+                    case 0:
+                        resultState = s;
+                        break;
+                    default:
+                        return null;
+                }
+            }
+            return CreateFromIdAndState(Value.Id, resultState);
+        }
+        internal override SqlQueryHashCommentElement? ReplaceChildrenById(IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states){
+            var resultState = Value.State;
+            foreach (var (id, state) in states){
+                if (state is not SqlQueryStringSlotState s) return null;
+                if (id == Value.Id) resultState = s;
+                else return null;
+            }
+            return CreateFromIdAndState(Value.Id, resultState);
+        }
+        internal override SqlQueryHashCommentElement? ReplaceChildByRole(SqlQueryElementRole role, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenByRole([(role, state)]);
+        }
+        internal override SqlQueryHashCommentElement? ReplaceChildById(SqlQuerySlotId id, SqlQuerySlotStateAbstract state){
+            return ReplaceChildrenById([(id, state)]);
+        }
+        #endregion
     }
+    /// <summary>
+    /// コメント内部の改行を除く文字列そのものを表す具象クラス。各コメント型の子要素となる。
+    /// </summary>
+    /// <remarks>
+    /// Build・DebugBuildは実際には使わない。Value読むだけだからな。
+    /// </remarks>
+    internal sealed record SqlQueryStringElement : SqlQueryElement {
+        //他の要素とまとめる理由が皆無なため、Element直下の型。
+
+
+        internal string Value { get; }
+        internal override bool HasChild => false;
+        internal override bool HasChildNode => false;
+        //コンストラクタ
+        internal SqlQueryStringElement(string value) {
+            Value = value.Replace("\n", "").Replace("\r", "");
+        }
+        internal static SqlQueryStringElement Create(string value){
+            return new SqlQueryStringElement(value);
+        }
+        internal static SqlQueryStringElement CreateNull() => new (string.Empty);
+        internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context){
+            return new SqlBuiltQueryFragmentText(
+                Value,
+                before : new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
+                after: new SqlQueryFragmentConditions(Space: RequiredStatus.Satisfied),
+                TriviaOnly: true
+                );
+        }
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context){
+            return new([$"{Value}"]);
+        }
+        internal override SqlQueryElement CloneNode(SqlQueryDraft draft) => this;
+        internal override IEnumerable<(SqlQueryElementRole Role, SqlQuerySlotFieldAbstract Slot)> IterateChildren() { yield break; }
+        internal override SqlQueryElement? ReplaceChildrenByRole(IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states) => throw new NotSupportedException("文字列型ノードは子要素を持たない");
+        internal override SqlQueryElement? ReplaceChildrenById(IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states) => throw new NotSupportedException("文字列型ノードは子要素を持たない");
+
+    }
+
 
 
     #endregion
@@ -1430,6 +1732,8 @@ namespace Crast.Accessor.SqlWrapper{
     //Triviaと本体とを分けた状態で親に回して、親の方で本体を加工したのちにTriviaを接続する方が良さげ。
     //定置キーワードの指定や空白文字の必須性など、一段上で処理した方がいい処理は多そう。
     //→代用ElementによるTrivia配置構成の更新は一通り終わったので、Build処理とDebugBuild処理の整備に入る。
+
+    //裸文字要素の定義を完了。
 
     #region Token要素の定義
 

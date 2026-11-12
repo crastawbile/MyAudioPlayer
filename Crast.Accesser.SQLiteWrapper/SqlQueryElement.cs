@@ -13,6 +13,12 @@ namespace Crast.Accessor.SqlWrapper{
     //メソッドの所属型と引数型と返り値型がジェネリックで共通化されていることを保証することが第一義であるため、
     //ジェネリックで解決できないならパターンマッチングで解決するしかない。
 
+
+
+    //裸文字列型の定義に伴い、コメント要素が子要素を持つようになったため、TriviaSlot型を再調整する必要がある。
+    //→一通りは直したはず？
+
+
     #region 引数用のデータクラスや列挙型
 
     /// <summary>
@@ -47,6 +53,10 @@ namespace Crast.Accessor.SqlWrapper{
         #endregion
     };
     public enum SqlQueryElementRoleEnum{
+
+
+        //SQL構造上の役割による分類。
+
         Statement,//実行可能な命令の実体:ISqlStatement:単数
         Relation,//データの供給源（表など）:ITableExpression:複数
         Selection,//出力・対象の指定（列）:IScalarExpression:複数
@@ -54,8 +64,17 @@ namespace Crast.Accessor.SqlWrapper{
         Argument,//演算や関数の入力値:IScalarExpression:複数
         Ordering,//並び替えや集約の基準:ISqlElement (Sort):複数
         Naming,//名前定義（別名など）:SqlIdentifier:単数
+
+        //ツリー構造上の役割による分類。
+
         Trivia,//空白文字やコメントなどの構造に影響しない要素:SqlQueryTriviaElement:複数
-        Listed//リスト型の直下。直上のElementに対してはリストの要素という以外の意味が無い。
+        Listed,//リスト型の直下。直上のElementに対してはリストの要素という以外の意味が無い。
+
+
+        //ツリー末端要素専用の特殊な役割。
+
+        Token,//キーワードや記号など、クエリ文をElementに変換する際に必要な情報。Elementの構造上は意味を持たない。
+        String,//裸文字列。ブロックコメント内の改行を除いた文字列。
     }
 
     /// <summary>
@@ -359,6 +378,71 @@ namespace Crast.Accessor.SqlWrapper{
 
     }
 
+    internal sealed record class SqlQueryStringSlotField : SqlQuerySlotField<SqlQueryStringElement>{
+        internal override Type GenericType => typeof(SqlQueryStringElement);
+        internal override SqlQueryStringSlotState State => (SqlQueryStringSlotState)base.State;
+        //コンストラクタ
+        internal SqlQueryStringSlotField(SqlQuerySlotId id, SqlQuerySlotCapabilities caps, SqlQueryStringSlotState state)
+            : base(id, caps, state)
+        {
+        }
+        #region ファクトリ
+        internal static SqlQueryStringSlotField Create(
+            SqlQueryDraft draft,
+            SqlQueryStringSlotState state
+            )
+        {
+            return new SqlQueryStringSlotField(
+                SqlQuerySlotId.GetNextId(draft),
+                SqlQuerySlotCapabilities.OnlyNormal,
+                state
+                );
+        }
+        internal static SqlQueryStringSlotField CreateNormal(
+            SqlQueryDraft draft,
+            SqlQueryStringElement element
+            )
+        {
+            return new SqlQueryStringSlotField(
+                SqlQuerySlotId.GetNextId(draft),
+                SqlQuerySlotCapabilities.OnlyNormal,
+                SqlQueryStringSlotState.CreateNormal(element)
+                );
+        }
+        #endregion
+
+
+        #region Buildの通知シンクにIDを追加する処理
+        internal override SqlBuiltQueryFragmentText Build(SqlBuildContext context)
+        {
+            var fragment = State.Element.Build(context);
+            context.AdaptDiagnostics(Id);
+            return fragment;
+        }
+        internal override SqlDebugBuiltQuery DebugBuild(SqlDebugBuildContext context)
+        {
+            var fragment = State.Element.DebugBuild(context);
+            context.AdaptDiagnostics(Id);
+            return fragment;
+        }
+        #endregion
+
+        #region 状態遷移用メソッド
+        internal SqlQueryStringSlotField ReplaceState(SqlQueryStringSlotState state){
+            return new(Id, Capabilities, state);
+        }
+        #endregion
+
+        #region Elementのメソッドを呼び出す処理
+        internal override SqlQuerySlotFieldAbstract? GetChildByRole(SqlQueryElementRole role) => null;
+        internal override SqlQuerySlotFieldAbstract? GetChildById(SqlQuerySlotId id) => null;
+        internal override SqlQueryElementRole? GetRoleById(SqlQuerySlotId childId, out SqlQuerySlotFieldAbstract? targetSlot){
+            targetSlot = null;
+            return null;
+        }
+        #endregion
+
+    }
     internal sealed record class SqlQueryTriviaSlotField : SqlQuerySlotField<SqlQueryTriviaElement> {
         internal override Type GenericType => typeof(SqlQueryTriviaElement);
         internal override SqlQueryTriviaSlotState State => (SqlQueryTriviaSlotState)base.State;
@@ -422,17 +506,27 @@ namespace Crast.Accessor.SqlWrapper{
         /// <summary>
         /// 子世代のSlotFieldを、Roleで取得する。
         /// </summary>
-        internal override SqlQueryTriviaSlotField? GetChildByRole(SqlQueryElementRole role) => null;
+        internal override SqlQueryStringSlotField? GetChildByRole(SqlQueryElementRole role) {
+            if (State.Element.TriviaType != TriviaType.Comment) return null;
+            return State.Element.GetChildByRole(role);
+        }
         /// <summary>
         /// 子世代のSlotFieldを、IDで取得する。
         /// </summary>
-        internal override SqlQueryTriviaSlotField? GetChildById(SqlQuerySlotId id) => null;
+        internal override SqlQueryStringSlotField? GetChildById(SqlQuerySlotId id) {
+            if (State.Element.TriviaType != TriviaType.Comment) return null;
+            return State.Element.GetChildById(id);
+        }
         /// <summary>
         /// IDで指定された子世代のSlotFieldのRoleを取得する。
         /// </summary>
         internal override SqlQueryElementRole? GetRoleById(SqlQuerySlotId childId, out SqlQuerySlotFieldAbstract? targetSlot){
-            targetSlot = null;
-            return null;
+            if (State.Element.TriviaType != TriviaType.Comment){
+                targetSlot = null;
+                return null;
+            } else {
+                return State.Element.GetRoleById(childId, out targetSlot);
+            }
         }
 
         #endregion
@@ -756,6 +850,53 @@ namespace Crast.Accessor.SqlWrapper{
         }
     }
 
+    internal sealed record class SqlQueryStringSlotState : SqlQuerySlotState<SqlQueryStringElement>{
+        internal override Type GenericType => typeof(SqlQueryStringElement);
+        internal override SqlQueryStringElement Element => base.MainElement!;
+        protected override SqlQueryStringElement MainElement => base.MainElement!;
+        protected override SqlQuerySubElement<SqlQueryStringElement>? SubElement => null;
+        //コンストラクタ
+        internal SqlQueryStringSlotState(SqlQueryStringElement mainElement)
+            : base(SqlQuerySlotStateEnum.Normal, mainElement, null)
+        {
+        }
+        #region ファクトリ
+        public static SqlQueryStringSlotState CreateNormal(SqlQueryStringElement element) => new(element);
+        #endregion
+
+        #region 状態遷移用メソッド
+        /// <summary>
+        /// スロットの中身を置き換える。
+        /// </summary>
+        /// <param name="element"></param>
+        /// <returns></returns>
+        internal SqlQueryStringSlotState ToNormal(SqlQueryStringElement element) => new(element);
+        #endregion
+
+        #region Elementのメソッドを呼び出すだけの処理
+
+        internal override SqlQueryStringSlotState CloneNode(SqlQueryDraft draft) => this;
+        internal override SqlQueryStringSlotState? ReplaceChildrenByRole(
+            IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew)
+        {
+            return null;
+        }
+        internal override SqlQueryStringSlotState? ReplaceChildrenById(
+            IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states,
+            SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew)
+        {
+            return null;
+        }
+        #endregion
+
+        /// <summary>
+        /// StateをFieldに挿入する、メソッドチェイン用の逆順処理
+        /// </summary>
+        /// <param name="field"></param>
+        /// <returns></returns>
+        internal SqlQueryStringSlotField SetInField(SqlQueryStringSlotField field) => field.ReplaceState(this);
+    }
     internal sealed record class SqlQueryTriviaSlotState : SqlQuerySlotState<SqlQueryTriviaElement> {
         internal override Type GenericType => typeof(SqlQueryTriviaElement);
         internal override SqlQueryTriviaElement Element => base.MainElement!;
@@ -787,18 +928,27 @@ namespace Crast.Accessor.SqlWrapper{
         internal SqlQueryTriviaSlotField SetInField(SqlQueryTriviaSlotField field) => field.ReplaceState(this);
 
         #region Elementのメソッドを呼び出すだけの処理
-        internal override SqlQueryTriviaSlotState CloneNode(SqlQueryDraft draft) => this;
+        internal override SqlQueryTriviaSlotState CloneNode(SqlQueryDraft draft) {
+            if (Element.TriviaType != TriviaType.Comment) return this;
+            return new(Element.CloneNode(draft));
+        }
         internal override SqlQueryTriviaSlotState? ReplaceChildrenByRole(
             IEnumerable<(SqlQueryElementRole role, SqlQuerySlotStateAbstract state)> states,
             SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew)
         {
-            return null;
+            if (Element.TriviaType != TriviaType.Comment) return this;
+            var result = Element.ReplaceChildrenByRole(states);
+            if (result is null) return null;
+            return new SqlQueryTriviaSlotState(result);
         }
         internal override SqlQueryTriviaSlotState? ReplaceChildrenById(
             IEnumerable<(SqlQuerySlotId id, SqlQuerySlotStateAbstract state)> states,
             SqlQueryTriviaMergeMode mode = SqlQueryTriviaMergeMode.AppendNew)
         {
-            return null;
+            if (Element.TriviaType != TriviaType.Comment) return this;
+            var result = Element.ReplaceChildrenById(states);
+            if (result is null) return null;
+            return new SqlQueryTriviaSlotState(result);
         }
         #endregion
 

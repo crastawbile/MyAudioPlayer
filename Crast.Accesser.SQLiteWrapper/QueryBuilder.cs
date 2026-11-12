@@ -75,6 +75,9 @@ namespace Crast.Accessor.SqlWrapper {
     /// <summary>
     /// ビルド中に発生した警告や通知の扱い方を表すenum。
     /// </summary>
+    /// <remarks>
+    /// AllowAndConvert, AlertAndConvert, ThrowExceptionの三種。
+    /// </remarks>
     public enum AlertPolicy {
         AllowAndConvert,   // 自動変換して続行（Debug時はInfo/Warning通知）
         AlertAndConvert,   // 警告（Notice）を追加した上で変換して続行
@@ -116,6 +119,8 @@ namespace Crast.Accessor.SqlWrapper {
         #endregion
     }
     public sealed record SqlQueryDebugBuildOptions : SqlQueryBuildOptionBase {
+        public char NewlineChar { get; init; } = '\n';
+
         #region デバッグビルド時の表示設定
         public bool ShowIds { get; init; } = false; //要素のIDを表示するか
         public bool ShowRole { get; init; } = false;//要素の親との関係を表示するか
@@ -497,7 +502,7 @@ namespace Crast.Accessor.SqlWrapper {
         //ってか、ブロックコメントをElement一つで処理せず、行ごとに別のエレメントと見做すべきなのか。
         //ブロックコメント内の改行もBuildOptionの管理下だもんな。
         //そうか、全てのコメント要素の下に、裸コメント要素を置いておけば、全て同じ処理になるのか。
-
+        //一旦、裸コメント型Elementを作ってくるまで待機。
         
 
 
