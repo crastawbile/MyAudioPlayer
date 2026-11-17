@@ -20,6 +20,7 @@ namespace Crast.Accessor.SqlWrapper{
             return new SqlQuerySlotId(Interlocked.Increment(ref counter.Value));// スレッド安全性の担保
         }
         #endregion
+        public override string ToString() => $"{Value:0000}";
     }
     /// <summary>
     /// ルートからあるSlotまでのID列を表すデータクラス。
@@ -155,8 +156,9 @@ namespace Crast.Accessor.SqlWrapper{
     /// 正常変動、
     /// 正常無変動、
     /// Pathが途中で変化したために停止、
+    /// Pathの外でツリー構造が途中で変化したために停止、
     /// 対象IDのスロットに到達できなくなったために無効化、
-    /// の4種
+    /// の5種
     /// </remarks>
     public enum SqlQueryPointerResult {
         /// <summary>

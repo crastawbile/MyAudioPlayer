@@ -17,6 +17,9 @@ namespace Crast.Accessor.SqlWrapper{
 
     //裸文字列型の定義に伴い、コメント要素が子要素を持つようになったため、TriviaSlot型を再調整する必要がある。
     //→一通りは直したはず？
+    //というか、代用エレメントを設置してElementの省略を行わないんなら、そもそもSlotStateが要らんな。Element自体がStateEnumを持てばいい。
+    //BuildとDebugBuildの処理が、IsNormalか否かで分岐するだけだし、そんな高度な処理にもなるまい。
+    //DebugBuildの処理が出来たら、こっちも作り直そう。
 
 
     #region 引数用のデータクラスや列挙型

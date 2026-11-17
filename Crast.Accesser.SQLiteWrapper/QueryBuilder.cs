@@ -34,6 +34,7 @@ namespace Crast.Accessor.SqlWrapper {
         public (char Open, char Close) QuoteChars { get; }
         public (string Open, string Close) BlockCommentChars { get; } = ("/*", "*/");
         public string LineCommentPrefix { get; } = "-- ";
+        //コンストラクタ
         public SqlDialect(SqlType dialect) {
             //単一の方言が指定されていることを確認
             if (dialect == SqlType.None || (dialect & (dialect - 1)) != 0) {
@@ -451,6 +452,13 @@ namespace Crast.Accessor.SqlWrapper {
     //文字列自体を、罫線追加前と追加後でそれぞれ専用型にしておくと、処理の区別が楽か。
 
 
+    internal enum SqlDebugBuiltFragmentStileEnum {
+        basic, //「SELECT文」など、Element具象型の名前を表示するだけで十分なもの。
+        Count, //「改行文字(×3)」など、種類名と個数の表示が必要なもの。
+        Token, //「+演算子」など、上のElementに行かないと名前が分からないもの。
+        Variable, //「列名(列A)」など、Element具象型の名前と内容文字列の両方が必要なもの。内容が巨大すぎる場合は表示用ラベルに変換する。
+    }
+
     /// <summary>
     /// DebugBuildで単独のElementから出力される文字列自体(罫線追加前)を指すデータ型。
     /// </summary>
@@ -459,27 +467,57 @@ namespace Crast.Accessor.SqlWrapper {
     /// </remarks>
     /// <param name="Values"></param>
     internal abstract record SqlDebugBuiltFragmentTexts {
-        internal readonly SqlQuerySlotId? Id;
-        internal readonly SqlQueryElementRole? Role;
-        internal readonly string JapaneseName;
-        internal readonly string[] Notices;
+        internal SqlDebugBuiltFragmentStileEnum Stile { get; }
+        internal SqlQuerySlotId? Id { get; }
+        internal SqlQueryElementRole? Role { get; }
+        internal string JapaneseName { get; }
+        internal string? Content { get; }
+        internal string[] Notices { get; }
 
         //コンストラクタ
-        internal SqlDebugBuiltFragmentTexts(
+        protected SqlDebugBuiltFragmentTexts(
+            SqlDebugBuiltFragmentStileEnum stile,
             SqlQuerySlotId? id,
             SqlQueryElementRole? role,
             string japaneseName,
+            string? content,
             string[] notices
             ) {
+            Stile = stile;
             Id = id;
             Role = role;
             JapaneseName = japaneseName;
+            Content = content;
             Notices = notices;
 
         }
 
-        internal IEnumerable<string> OutputTexts() {
-            yield return $"：";
+
+        internal string OutputHead(SqlDebugBuildContext context) {
+            string idText = "";
+            if (context.Options.ShowIds) {
+                idText = $"(#{Id?.Value.ToString("D4") ?? "???"}) ";
+            }
+            //スタイルごとに、本体内容を一行で出力。
+            return Stile switch{
+            SqlDebugBuiltFragmentStileEnum.basic => $"{idText}{JapaneseName}",
+            SqlDebugBuiltFragmentStileEnum.Count => $"{idText}{JapaneseName} ({Content})",
+            SqlDebugBuiltFragmentStileEnum.Token => $"{idText}{JapaneseName}",
+            SqlDebugBuiltFragmentStileEnum.Variable => $"{idText}{JapaneseName} ({Content})",
+            _ => throw new ArgumentOutOfRangeException(nameof(Stile), Stile, null)
+            };
+        }
+        internal IEnumerable<string> OutputNotices(){
+            //通知があれば続けて出力。
+            foreach (var notice in Notices){
+                yield return notice;
+            }
+        }
+        internal IEnumerable<string> OutputAll(SqlDebugBuildContext context){
+            yield return OutputHead(context);
+            foreach (var notice in OutputNotices()){
+                yield return notice;
+            }
         }
 
         //DebugBuildの出力形式をここで定義しておくべきだな……。
@@ -502,8 +540,11 @@ namespace Crast.Accessor.SqlWrapper {
         //ってか、ブロックコメントをElement一つで処理せず、行ごとに別のエレメントと見做すべきなのか。
         //ブロックコメント内の改行もBuildOptionの管理下だもんな。
         //そうか、全てのコメント要素の下に、裸コメント要素を置いておけば、全て同じ処理になるのか。
-        //一旦、裸コメント型Elementを作ってくるまで待機。
-        
+        //一旦、裸コメント型Elementを作ってくるまで待機。→完了。
+        //つまり、全部、#ID001 : 要素名(内容) の1行形式で出力することになる。
+        //問題あるとすれば、定置キーワード類が、上でしか中身を宣言できないくらいだが。
+
+
 
 
 
@@ -514,15 +555,35 @@ namespace Crast.Accessor.SqlWrapper {
     /// </summary>
     internal sealed record SqlDebugBuiltFragmentTextsBase : SqlDebugBuiltFragmentTexts {
         //コンストラクタ
-        internal SqlDebugBuiltFragmentTextsBase(
+        private SqlDebugBuiltFragmentTextsBase(
+            SqlDebugBuiltFragmentStileEnum stile,
             string japaneseName,
+            string? content,
             string[] notices
             )
-            :base(null, null, japaneseName, notices)
+            : base(stile, null, null, japaneseName, content, notices)
         {
         }
+
+        #region ファクトリ
+        
+        internal static SqlDebugBuiltFragmentTextsBase CreateBasic(string japaneseName, string[] notices){
+            return new SqlDebugBuiltFragmentTextsBase(SqlDebugBuiltFragmentStileEnum.basic, japaneseName, null, notices);
+        }
+        internal static SqlDebugBuiltFragmentTextsBase CreateCount(string japaneseName, ushort count, string[] notices){
+            return new SqlDebugBuiltFragmentTextsBase(SqlDebugBuiltFragmentStileEnum.Count, japaneseName, $"×{count}", notices);
+        }
+        internal static SqlDebugBuiltFragmentTextsBase CreateToken(string japaneseName, string[] notices){
+            return new SqlDebugBuiltFragmentTextsBase(SqlDebugBuiltFragmentStileEnum.Token, japaneseName, null, notices);
+        }
+        internal static SqlDebugBuiltFragmentTextsBase CreateVariable(string japaneseName, string content, string[] notices){
+            return new SqlDebugBuiltFragmentTextsBase(SqlDebugBuiltFragmentStileEnum.Variable, japaneseName, content, notices);
+        }
+
+        #endregion
+
         internal SqlDebugBuiltFragmentTextsWithId WithId(SqlQuerySlotId id) {
-            return new SqlDebugBuiltFragmentTextsWithId(id, JapaneseName, Notices);
+            return SqlDebugBuiltFragmentTextsWithId.WithId(this, id);
         }
 
     }
@@ -531,16 +592,21 @@ namespace Crast.Accessor.SqlWrapper {
     /// </summary>
     internal sealed record SqlDebugBuiltFragmentTextsWithId : SqlDebugBuiltFragmentTexts{
         //コンストラクタ
-        internal SqlDebugBuiltFragmentTextsWithId(
-            SqlQuerySlotId id,
+        private SqlDebugBuiltFragmentTextsWithId(
+            SqlDebugBuiltFragmentStileEnum stile,
+            SqlQuerySlotId? id,
             string japaneseName,
+            string? content,
             string[] notices
             )
-            : base(id, null, japaneseName, notices)
+            : base(stile, id, null, japaneseName, content, notices)
         {
         }
+        internal static SqlDebugBuiltFragmentTextsWithId WithId(SqlDebugBuiltFragmentTextsBase fragment, SqlQuerySlotId id){
+            return new SqlDebugBuiltFragmentTextsWithId(fragment.Stile, id, fragment.JapaneseName, fragment.Content, fragment.Notices);
+        }
         internal SqlDebugBuiltFragmentTextsWithRole WithRole(SqlQueryElementRole role) {
-            return new SqlDebugBuiltFragmentTextsWithRole(Id!.Value, role, JapaneseName, Notices);
+            return SqlDebugBuiltFragmentTextsWithRole.WithRole(this, role);
         }
 
     }
@@ -549,39 +615,164 @@ namespace Crast.Accessor.SqlWrapper {
     /// </summary>
     internal sealed record SqlDebugBuiltFragmentTextsWithRole : SqlDebugBuiltFragmentTexts{
         //コンストラクタ
-        internal SqlDebugBuiltFragmentTextsWithRole(
-            SqlQuerySlotId id,
-            SqlQueryElementRole role,
+        private SqlDebugBuiltFragmentTextsWithRole(
+            SqlDebugBuiltFragmentStileEnum stile,
+            SqlQuerySlotId? id,
+            SqlQueryElementRole? role,
             string japaneseName,
+            string? content,
             string[] notices
             )
-            : base(id, role, japaneseName, notices)
+            : base(stile, id, role, japaneseName, content, notices)
         {
+        }
+        internal static SqlDebugBuiltFragmentTextsWithRole WithRole(SqlDebugBuiltFragmentTextsWithId fragment, SqlQueryElementRole role) {
+            return new SqlDebugBuiltFragmentTextsWithRole(fragment.Stile, fragment.Id, role, fragment.JapaneseName, fragment.Content, fragment.Notices);
         }
 
     }
     /// <summary>
     /// 罫線を付加された、子Elementの出力文字列群の集合
     /// </summary>
-    internal sealed record SqlDebugBuiltFragmentGroup {
+    internal sealed record SqlDebugBuiltFragmentTextsGroup {
         internal string[] Texts { get; }
         //コンストラクタ
-        internal SqlDebugBuiltFragmentGroup(List<SqlDebugBuiltFragmentTextsWithRole> children) {
-            string[] texts = [];
+        internal SqlDebugBuiltFragmentTextsGroup(SqlDebugBuildContext context, IList<SqlDebugBuiltFragmentTextsWithRole> children) {
+            List<string> texts = [];
             var length = children.Count;
             if (length == 0) {
-                Texts = texts;
+                Texts = [..texts];
                 return;
             }
-            foreach (var child in children) {
-                
+            for(var i1 = 0; i1 < length - 1; i1++) {
+                texts.Add($"├{children[i1].OutputHead(context)}");
+                foreach(var notice in children[i1].OutputNotices()) {
+                    texts.Add($"│：{notice}");
+                }
+            }
+            texts.Add($"└{children[length - 1].OutputHead(context)}");
+            foreach (var notice in children[length - 1].OutputNotices()){
+                texts.Add($"　：{notice}");
             }
 
 
-            Texts = texts;
+            Texts = [..texts];
         }
     }
+    internal abstract record SqlDebugBuiltFragment {
+        protected SqlDebugBuiltFragmentTexts HeadField { get; }
+        internal SqlDebugBuiltFragmentTextsGroup Children { get; }
+        //フルコンストラクタ
+        protected SqlDebugBuiltFragment(
+            SqlDebugBuiltFragmentTexts head,
+            SqlDebugBuiltFragmentTextsGroup children
+            )
+        {
+            HeadField = head;
+            Children = children;
+        }
 
+
+    }
+    internal sealed record SqlDebugBuiltFragmentBase : SqlDebugBuiltFragment {
+        internal SqlDebugBuiltFragmentTextsBase Head { get => (SqlDebugBuiltFragmentTextsBase)HeadField; }
+        //フルコンストラクタ
+        private SqlDebugBuiltFragmentBase(
+            SqlDebugBuiltFragmentTextsBase head,
+            SqlDebugBuiltFragmentTextsGroup children
+            )
+            : base(head, children)
+        {}
+        #region ファクトリ
+        internal static SqlDebugBuiltFragmentBase Create(
+            SqlDebugBuildContext context,
+            SqlDebugBuiltFragmentTextsBase head,
+            IList<SqlDebugBuiltFragmentTextsWithRole> children)
+        {
+            var group = new SqlDebugBuiltFragmentTextsGroup(context, children);
+            return new (head, group);
+        }
+        internal static SqlDebugBuiltFragmentBase CreateBasic(
+            SqlDebugBuildContext context,
+            string japaneseName,
+            string[] notices,
+            IList<SqlDebugBuiltFragmentTextsWithRole> children)
+        {
+            var head = SqlDebugBuiltFragmentTextsBase.CreateBasic(japaneseName, notices);
+            var group = new SqlDebugBuiltFragmentTextsGroup(context, children);
+            return new (head, group);
+        }
+        internal static SqlDebugBuiltFragmentBase CreateCount(
+            SqlDebugBuildContext context,
+            string japaneseName,
+            ushort count,
+            string[] notices,
+            IList<SqlDebugBuiltFragmentTextsWithRole> children)
+        {
+            var head = SqlDebugBuiltFragmentTextsBase.CreateCount(japaneseName, count, notices);
+            var group = new SqlDebugBuiltFragmentTextsGroup(context, children);
+            return new (head, group);
+        }
+        internal static SqlDebugBuiltFragmentBase CreateToken(
+            SqlDebugBuildContext context,
+            string japaneseName,
+            string[] notices,
+            IList<SqlDebugBuiltFragmentTextsWithRole> children)
+        {
+            var head = SqlDebugBuiltFragmentTextsBase.CreateToken(japaneseName, notices);
+            var group = new SqlDebugBuiltFragmentTextsGroup(context, children);
+            return new (head, group);
+        }
+        internal static SqlDebugBuiltFragmentBase CreateVariable(
+            SqlDebugBuildContext context,
+            string japaneseName,
+            string content,
+            string[] notices,
+            IList<SqlDebugBuiltFragmentTextsWithRole> children)
+        {
+            var head = SqlDebugBuiltFragmentTextsBase.CreateVariable(japaneseName, content, notices);
+            var group = new SqlDebugBuiltFragmentTextsGroup(context, children);
+            return new (head, group);
+        }
+        #endregion
+        internal SqlDebugBuiltFragmentWithId WithId(SqlQuerySlotId id){
+            return SqlDebugBuiltFragmentWithId.WithId(this, id);
+        }
+
+    }
+    internal sealed record SqlDebugBuiltFragmentWithId : SqlDebugBuiltFragment{
+        internal SqlDebugBuiltFragmentTextsWithId Head { get => (SqlDebugBuiltFragmentTextsWithId)HeadField; }
+        //フルコンストラクタ
+        private SqlDebugBuiltFragmentWithId(
+            SqlDebugBuiltFragmentTextsWithId head,
+            SqlDebugBuiltFragmentTextsGroup children
+            )
+            : base(head, children)
+        { }
+        #region ファクトリ
+        internal static SqlDebugBuiltFragmentWithId WithId(SqlDebugBuiltFragmentBase fragment, SqlQuerySlotId id){
+            return new(fragment.Head.WithId(id), fragment.Children);
+        }
+        #endregion
+        internal SqlDebugBuiltFragmentWithRole WithRole(SqlQueryElementRole role){
+            return SqlDebugBuiltFragmentWithRole.WithRole(this, role);
+        }
+    }
+    internal sealed record SqlDebugBuiltFragmentWithRole : SqlDebugBuiltFragment{
+        internal SqlDebugBuiltFragmentTextsWithRole Head { get => (SqlDebugBuiltFragmentTextsWithRole)HeadField; }
+        //フルコンストラクタ
+        private SqlDebugBuiltFragmentWithRole(
+            SqlDebugBuiltFragmentTextsWithRole head,
+            SqlDebugBuiltFragmentTextsGroup children
+            )
+            : base(head, children)
+        { }
+        #region ファクトリ
+        internal static SqlDebugBuiltFragmentWithRole WithRole(SqlDebugBuiltFragmentWithId fragment, SqlQueryElementRole role){
+            return new(fragment.Head.WithRole(role), fragment.Children);
+        }
+        #endregion
+    }
 
 
     /// <summary>

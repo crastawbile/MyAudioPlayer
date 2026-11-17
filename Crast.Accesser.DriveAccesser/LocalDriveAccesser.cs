@@ -169,15 +169,15 @@ namespace Crast.Accesser.DriveAccesser{
             var infoScope = scope != null ? scope.Value : PermissionScope.ChildrenOnly;
             //まずは対象Pathが権限範囲内かどうか、もしくは、権限範囲が対象pathの下部構造か。そして権限スコープと引数スコープの共通範囲が存在するかどうか。
             //共通範囲が存在しないなら空配列を返して終了。
-            if (GetFileListAsync((dynamic)path, infoScope, out LocalDirectoryPath basePath, out PermissionScope targetScope, out List<DriveItemInfo> result)) return result.FromEnumerable();
-            if (targetScope == PermissionScope.SelfOnly) return result.FromEnumerable();
+            if (GetFileListAsync((dynamic)path, infoScope, out LocalDirectoryPath basePath, out PermissionScope targetScope, out List<DriveItemInfo> result)) return ExtensionMethods.ToAsyncEnumerable(result);
+            if (targetScope == PermissionScope.SelfOnly) return ExtensionMethods.ToAsyncEnumerable(result);
             //これ以降は、basePathを起点とするtargetScope範囲のtargetType種別のファイルをリストアップする処理。
             var targetType = Permission!.FileType & fileType;
             var searchOption = PermissionScope.SelfAndChildren.Include(targetScope) ? System.IO.SearchOption.AllDirectories : System.IO.SearchOption.TopDirectoryOnly;
             var di = new DirectoryInfo(path.Value);
             
-            return di.EnumerateFiles("*", searchOption)
-                .Where(f => 
+            return ExtensionMethods.ToAsyncEnumerable(di.EnumerateFiles("*", searchOption)
+                .Where(f =>
                     f.Extension.FromExtension().InFlag(targetType)
                 ) // 拡張子フィルタ適用
                 .Where(f =>
@@ -193,7 +193,7 @@ namespace Crast.Accesser.DriveAccesser{
                     LastModified: f.LastWriteTime,
                     IsDirectory: false
                 ))//各要素をDriveItemInfo型に変換
-                .FromEnumerable();//非同期ストリーム型に変換
+);//非同期ストリーム型に変換
         }
         //内部処理の一部を同名メソッドで切り出してある
         //早期returnの場合はtrue、後の処理に進む場合はfalse

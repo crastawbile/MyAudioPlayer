@@ -16,7 +16,7 @@
         /// </summary>
         /// <remarks>
         /// async IAsyncEnumerable<T>の内部で、
-        /// return FromEnumerable(既存のEnumerable);
+        /// return ToAsyncEnumerable(既存のEnumerable);
         /// とすることで非同期ストリームを返す。
         /// 
         /// System.Linq.Asyncがあるなら、そっちを使う方がいい気はする。
@@ -24,7 +24,7 @@
         /// <typeparam name="T"></typeparam>
         /// <param name="source"></param>
         /// <returns></returns>
-        public static async IAsyncEnumerable<T> FromEnumerable<T>(this IEnumerable<T> source){foreach (var item in source) yield return item;}
+        public static async IAsyncEnumerable<T> ToAsyncEnumerable<T>(this IEnumerable<T> source){foreach (var item in source) yield return item;}
         /// <summary>
         /// PHPのarray_splice風の処理を、末尾の確定している可変長添字配列であるList型に対して行う。
         /// </summary>
@@ -82,5 +82,18 @@
         /// <param name="obj"></param>
         /// <returns></returns>
         public static T ChainCastTo<T>(this object obj) => (T)obj;
+        /// <summary>
+        /// string.Joinによる配列→文字列変換を、メソッドチェイン記法で行う。
+        /// </summary>
+        /// <param name="source"></param>
+        /// <param name="separator"></param>
+        /// <returns></returns>
+        public static string Implode(this IEnumerable<string?> source, string separator) => string.Join(separator, source);
+        /// <summary>
+        /// string.Concat()による文字列ストリームの結合をメソッドチェイン形式で行う。
+        /// </summary>
+        /// <param name="source"></param>
+        /// <returns></returns>
+        public static string ConcatStrings(this IEnumerable<string?> source) => string.Concat(source);
     }
 }
